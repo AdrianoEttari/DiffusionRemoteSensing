@@ -2,14 +2,14 @@ import torch
 import os
 from torchvision import transforms
 from UNet_model_superres import Residual_Attention_UNet_superres
-from train_diffusion_superres_COMPLETE import Diffusion
+from train_diffusion_superres import Diffusion
 import matplotlib.pyplot as plt
 from PIL import Image, ImageFilter
 import torch
 import os
 from torchvision import transforms
 from UNet_model_SAR_TO_NDVI import Residual_Attention_UNet_SAR_TO_NDVI
-from train_diffusion_SAR_TO_NDVI_COMPLETE import Diffusion
+from train_diffusion_SAR_TO_NDVI import Diffusion
 import matplotlib.pyplot as plt
 
 def super_resolver(img_path, device, model_name):

@@ -142,7 +142,7 @@ def launch(args):
     from torchvision import transforms
     from torch.nn import functional as F
     import matplotlib.pyplot as plt
-    from train_diffusion_superres_COMPLETE import Diffusion
+    from train_diffusion_superres import Diffusion
     from UNet_model_superres import Residual_Attention_UNet_superres
     import os  
 

@@ -1,5 +1,5 @@
 # %%
-from train_diffusion_generation_COMPLETE import Diffusion
+from generate_new_imgs.train_diffusion_generation import Diffusion
 from UNet_model_generation import Residual_Attention_UNet_generation
 import torch
 import matplotlib.pyplot as plt
