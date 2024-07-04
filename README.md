@@ -1,6 +1,6 @@
-## Adaptation of the Diffusion Model for Remote Sensing Imagery
+# Adaptation of the Diffusion Model for Remote Sensing Imagery
 
-### Summary of the files and folders 
+## Summary of the files and folders 
 In **train_diffusion_superres.py** there is the diffusion model class with all the functions to perform its sampling and its training. The **UNet_model_superres.py** is the python file of the UNet model used by the diffusion model to get the noise inside the images, just for the super resolution problem.
 
 **train_diffusion_SAR_TO_NDVI.py** and **UNet_model_SAR_TO_NDVI.py** are used to solve the SAR to NDVI problem, but they work the same way. The UNet model has been structured in the same fashion of the super-resolution (instead of using the low resolution input image, we use the SAR image and instead of the high resolution image we use the NDVI image).
@@ -26,9 +26,9 @@ In the **models_run** folder there are the different models with their weights a
 In **degradation_from_BSRGAN.py** there are functions taken from https://github.com/IceClear/StableSR to degrade the images in a more realistic way; these functions are then applied in the function get_data_superres_BSRGAN() of utils.py.  
 <!-- In the folder **multihead_attention** there are files to implement the multihead attention mechanism in the UNet model instead of the simple attention. -->
 
-### RESULTS
+## RESULTS
 
-#### SUPER RESOLUTION
+### SUPER RESOLUTION
 
 [<img src="assets/imgsli_up42.png" height="400px"/>](https://imgsli.com/Mjc2NjAw)
 
@@ -36,19 +36,19 @@ Here is a video showcasing the denoising process for the super resolution proble
 
 ![Video Denoising](https://github.com/AdrianoEttari/DiffusionRemoteSensing/blob/main/assets/UP42_SUPERRESOLUTION/DownBlur/up42_superresolution.gif)
 
-#### IMAGE GENERATION of https://github.com/phelber/EuroSAT. 
+### IMAGE GENERATION of https://github.com/phelber/EuroSAT. 
 The first set of images is the real one and the second set is the generated one.
 
 <img src="assets/EuroSat_real.png" height="250px"/>
 <img src="assets/EuroSat_predictions.png" height="265px"/>
 
-#### SAR TO NDVI
+### SAR TO NDVI
 
 NDVI G.T. stands for Ground Truth NDVI, while NDVI PRED. stands for the predicted NDVI from the SAR image.
 
 <img src="assets/SAR_to_NDVI.png" height="400px"/>
 
-### TODO
+## TODO
 - [ ] Add MultiHead Attention from Vision Transformer 
 - [ ] Incorporate the Diffusion Model in a Latent Diffusion Model
 - [ ] Substitute the simple Blur-Down-Gauss degradation with the BSR-degradation algorithm
@@ -56,10 +56,10 @@ NDVI G.T. stands for Ground Truth NDVI, while NDVI PRED. stands for the predicte
 - [x] ~~The EMA model in train_diffusion_generation_COMPLETE.py doesn't work properly. It is a minor problem because in general the results with EMA are not different from the ones without it.~~
 - [x] ~~Add Aggregation Sampling~~
 
-### Train (snippet to train a super resolution model on the anime dataset)
+## Train (snippet to train a super resolution model on the UP42 dataset with the DownBlur degradation)
 ```
-python3 train_diffusion_superres_COMPLETE.py --epochs=501 --noise_schedule='cosine' --batch_size=64 --image_size=512 --lr=2e-4 --snapshot_name=snapshot.pt --model_name='DDP_Residual_Attention_UNet_superres_EMA_magnification4_ANIME50k_DownBlur' --noise_steps=1500 --dataset_path='anime_data_50k' --inp_out_channels=3 --loss=MSE --magnification_factor=4 --UNet_type='Residual Attention UNet' --Degradation_type='DownBlur' --multiple_gpus='False' --ema_smoothing='True' --Blur_radius=0.5
+python3 train_diffusion_superres_COMPLETE.py --epochs=1001 --noise_schedule='cosine' --batch_size=16 --image_size=256 --lr=1e-4 --snapshot_name=snapshot.pt --model_name="Residual_Attention_UNet_superres_magnification2_LRimgsize128_up42_sentinel2_patches_downblur" --noise_steps=1500 --patience=50  --dataset_path='up42_sentinel2_patches' --inp_out_channels=3 --loss='MSE' --magnification_factor=2 --UNet_type='Residual Attention UNet' --Degradation_type='DownBlur' --multiple_gpus='False' --ema_smoothing='True' --Blur_radius=0.5
 ```
-### Contact
-If you have any questions, feel free to contact me at `adriano.ettari@unina.it`
+## Contact
+If you have any questions, feel free to contact me at `adriano.ettari@unina.it` or on my linkeding page [![LinkedIn](https://img.shields.io/badge/LinkedIn-%230077B5.svg?logo=linkedin&logoColor=white)](https://www.linkedin.com/in/adriano-ettari-b8741b21b/)
 
