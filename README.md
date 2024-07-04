@@ -43,6 +43,9 @@ The first set of images is the real one and the second set is the generated one.
 <img src="assets/EuroSat_predictions.png" height="265px"/>
 
 #### SAR TO NDVI
+
+NDVI G.T. stands for Ground Truth NDVI, while NDVI PRED. stands for the predicted NDVI from the SAR image.
+
 <img src="assets/SAR_to_NDVI.png" height="400px"/>
 
 ### TODO
