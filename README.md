@@ -30,7 +30,7 @@ In **degradation_from_BSRGAN.py** there are functions taken from https://github.
 
 #### SUPER RESOLUTION
 
-[<img src="assets/imgsli_up42.jpg" height="224px"/>](https://imgsli.com/Mjc2NjAw)
+[<img src="assets/imgsli_up42.png" height="224px"/>](https://imgsli.com/Mjc2NjAw)
 
 Here is a video showcasing the denoising process for the super resolution problem of the Sentinel-2 dataset:
 
@@ -43,7 +43,7 @@ The first set of images is the real one and the second set is the generated one.
 <img src="assets/EuroSat_predictions.png" height="265px"/>
 
 #### SAR TO NDVI
-<img src="assets/SAR_to_NDVI.png" height="250px"/>
+<img src="assets/SAR_to_NDVI.png" height="400px"/>
 
 ### TODO
 - [ ] Add MultiHead Attention from Vision Transformer 
