@@ -177,7 +177,6 @@ class UpConvBlock(nn.Module):
     '''
     def __init__(self, in_ch, out_ch, time_emb_dim, device):
         super().__init__()
-        # self.time_mlp =  nn.Linear(time_emb_dim, out_ch, device=device)
         self.time_mlp = self._make_te(time_emb_dim, out_ch, device=device)
         self.batch_norm = nn.BatchNorm2d(out_ch, device=device)
         self.relu = nn.ReLU(inplace=False)
