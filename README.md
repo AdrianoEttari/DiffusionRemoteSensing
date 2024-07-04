@@ -1,4 +1,4 @@
-# Adaptation of the Diffusion Model for Remote Sensing Imagery
+# Adaptation of Diffusion Models for Remote Sensing Imagery
 
 ## Summary of the files and folders 
 In **train_diffusion_superres.py** there is the diffusion model class with all the functions to perform its sampling and its training. The **UNet_model_superres.py** is the python file of the UNet model used by the diffusion model to get the noise inside the images, just for the super resolution problem.
