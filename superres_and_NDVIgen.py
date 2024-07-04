@@ -174,7 +174,6 @@ if __name__ == '__main__':
         lr_img = to_tensor(Image.open(img_path)).to(device)
         model_name = 'Residual_Attention_UNet_superres_magnification2_LRimgsize128_up42_sentinel2_patches_downblur'
         superres_img = super_resolver(lr_img, device, model_name)
-        import ipdb; ipdb.set_trace()
         file_name = os.path.basename(img_path)
         save_path = os.path.join('assets','Other',file_name.replace('lr', 'sr'))
         plot_lr_sr(lr_img, superres_img, histogram=False, save_path=save_path)
