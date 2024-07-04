@@ -1,5 +1,5 @@
 # This code is based on the original code of the paper "Designing a Practical Degradation Model
-#  for Deep Blind Image Super-Resolution" in the github repository "https://github.com/cszm/BSRGAN"
+#  for Deep Blind Image Super-Resolution" in the github repository "https://github.com/cszn/BSRGAN"
 
 # -*- coding: utf-8 -*-
 import numpy as np
