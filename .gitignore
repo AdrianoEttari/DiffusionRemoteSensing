@@ -163,6 +163,7 @@ cython_debug/
 __pycache__/
 FUTURE*
 assets/Other/
+models_run/Residual_Attention_UNet_generation_CIFAR10/
 
 # Files
 .DS_Store
