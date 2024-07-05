@@ -61,5 +61,5 @@ NDVI G.T. stands for Ground Truth NDVI, while NDVI PRED. stands for the predicte
 python3 train_diffusion_superres_COMPLETE.py --epochs=1001 --noise_schedule='cosine' --batch_size=16 --image_size=256 --lr=1e-4 --snapshot_name=snapshot.pt --model_name="Residual_Attention_UNet_superres_magnification2_LRimgsize128_up42_sentinel2_patches_downblur" --noise_steps=1500 --patience=50  --dataset_path='up42_sentinel2_patches' --inp_out_channels=3 --loss='MSE' --magnification_factor=2 --UNet_type='Residual Attention UNet' --Degradation_type='DownBlur' --multiple_gpus='False' --ema_smoothing='True' --Blur_radius=0.5
 ```
 ## Contact
-If you have any questions, feel free to contact me at `adriano.ettari@unina.it` or on my linkeding page [![LinkedIn](https://img.shields.io/badge/LinkedIn-%230077B5.svg?logo=linkedin&logoColor=white)](https://www.linkedin.com/in/adriano-ettari-b8741b21b/)
+If you have any questions, feel free to contact me at `adriano.ettari@unina.it` or on my LinkedIn page [![LinkedIn](https://img.shields.io/badge/LinkedIn-%230077B5.svg?logo=linkedin&logoColor=white)](https://www.linkedin.com/in/adriano-ettari-b8741b21b/)
 
