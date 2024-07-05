@@ -1,5 +1,5 @@
 # %%
-from generate_new_imgs.train_diffusion_generation import Diffusion
+from train_diffusion_generation import Diffusion
 from UNet_model_generation import Residual_Attention_UNet_generation
 import torch
 import matplotlib.pyplot as plt
@@ -7,7 +7,7 @@ import os
 
 noise_schedule = 'cosine'
 input_channels = output_channels = 3
-device = 'cpu'
+device = 'mps'
 noise_steps = 1500
 model_name = 'Residual_Attention_UNet_generation_sentinel_data_crops'
 snapshot_path = os.path.join('..', 'models_run', model_name, 'weights', 'snapshot.pt')
@@ -31,6 +31,7 @@ classes = ['Highway', 'River', 'HerbaceousVegetation','Residential', 'AnnualCrop
 ############ CIFAR10 ############
 # classes = ['airplane', 'automobile', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck']
 
+save_path = os.path.join('..', 'models_run', model_name, 'results', 'generated_imgs')
 classes = sorted(classes)
 fig, axs = plt.subplots(2, 5, figsize=(15, 6))  # Adjust figsize as needed
 axs = axs.ravel()
@@ -40,5 +41,6 @@ for i, class_ in enumerate(classes):
         axs[i].imshow(prediction[0].permute(1,2,0).detach().cpu())
         axs[i].axis('off')
         axs[i].set_title(class_, fontsize=12)
+plt.savefig(save_path, dpi=300, bbox_inches='tight', pad_inches=0)
 plt.show()
 # %%
