@@ -164,6 +164,8 @@ __pycache__/
 FUTURE*
 assets/Other/
 models_run/Residual_Attention_UNet_generation_CIFAR10/
+models_run/Residual_Attention_UNet_superres_EMA_magnification4_LRimgsize64_ANIME50k_DownBlur/
+models_run/Residual_Attention_UNet_superres_magnification4_LRimgsize50_CelebA50k_downblur
 
 # Files
 .DS_Store
