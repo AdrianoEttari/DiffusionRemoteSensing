@@ -22,7 +22,7 @@
 
 - **train_diffusion_generation.py** and **UNet_model_generation.py**: Training and UNet model files for generating new images, located in the **generate_new_imgs** folder.
 
-- **utils.py**: Similar to the one in the main folder but without data folder and dataset creation functions. In this case, the data folder must contain a separate folder for each class, with images inside each class folder.
+- **utils.py**: (it is in the generate_new_imgs folder) Similar to the one in the main folder but without data folder and dataset creation functions. In this case, the data folder must contain a separate folder for each class, with images inside each class folder.
 
 - **imgs_generator.py**: Equivalent to superres_and_NDVIgen.py but for the generative case.
 
