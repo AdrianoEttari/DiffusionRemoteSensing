@@ -52,8 +52,6 @@ NDVI G.T. stands for Ground Truth NDVI, while NDVI PRED. stands for the predicte
 - [ ] Add MultiHead Attention from Vision Transformer 
 - [ ] Incorporate the Diffusion Model in a Latent Diffusion Model
 - [ ] Substitute the simple Blur-Down-Gauss degradation with the BSR-degradation algorithm
-- [x] ~~Improve the Aggregation Sampling (it is not working properly)~~
-- [x] ~~The EMA model in train_diffusion_generation_COMPLETE.py doesn't work properly. It is a minor problem because in general the results with EMA are not different from the ones without it.~~
 - [x] ~~Add Aggregation Sampling~~
 
 ## Train (snippet to train a super resolution model on the UP42 dataset with the DownBlur degradation)
