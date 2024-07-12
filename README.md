@@ -1,25 +1,35 @@
 # Adaptation of Diffusion Models for Remote Sensing Imagery
 
-## Summary of the files and folders 
-In **train_diffusion_superres.py** there is the diffusion model class with all the functions to perform its sampling and its training. The **UNet_model_superres.py** is the python file of the UNet model used by the diffusion model to get the noise inside the images, just for the super resolution problem.
+## Summary of the Files and Folders 
 
-**train_diffusion_SAR_TO_NDVI.py** and **UNet_model_SAR_TO_NDVI.py** are used to solve the SAR to NDVI problem, but they work the same way. The UNet model has been structured in the same fashion of the super-resolution (instead of using the low resolution input image, we use the SAR image and instead of the high resolution image we use the NDVI image).
+- **train_diffusion_superres.py**: Contains the diffusion model class with all necessary functions for sampling and training.
 
-For the super-resolution and the SAR to NDVI problems there is the **superres_and_NDVIgen.py** file whose functions are used to perform and plot either the super-resolution generated images or the NDVI converted images (from the SAR ones).
+- **UNet_model_superres.py**: Defines the UNet model used by the diffusion model to denoise images for the super-resolution task.
 
-In **utils.py** there are the functions used to create the datafolder for the super resolution task (data_organizer()) and also the get_data functions (for the super resolution and the SAR to NDVI) which create the dataset that will be input to the dataloader.
+- **train_diffusion_SAR_TO_NDVI.py** and **UNet_model_SAR_TO_NDVI.py**: Used for solving the SAR to NDVI problem, structured similarly to the super-resolution models but using SAR images as inputs and NDVI images as outputs.
 
-The **models_representation.pptx** is a power point file in which you can find a graphical representation of the UNet model architectures. 
+- **superres_and_NDVIgen.py**: Contains functions for generating and plotting both super-resolution images and SAR-to-NDVI converted images.
 
-**Aggregation_Sampling.py** is used after training to split an image into multiple patches, super resolve each patch and eventually gather the super resolved patches together in the Aggregation Sampling way explained in the paper https://arxiv.org/abs/2305.07015. 
+- **utils.py**: Includes functions to create the data folder for the super-resolution task (data_organizer()) and the get_data functions for both super-resolution and SAR to NDVI tasks, which prepare the dataset for the dataloader.
 
-**qr_code_builder.py** is a python file that creates a QR code according to the url you pass as argument.
+- **models_representation.pptx**: A PowerPoint file with graphical representations of the UNet model architectures.
 
-Regarding the generative part, there are the training and sampling file (**train_diffusion_generation.py**) and the UNet model (**UNet_model_generation.py**) file in the folder **generate_new_imgs**. There is also the **utils.py** file but without the 
-functions to create the datafolder and the dataset because in the generative case you must have a datafolder with inside a folder for each class and inside each classfolder the images. The **imgs_generator.py** file is the superres_and_NDVIge.py file for the generative case.
+- **Aggregation_Sampling.py**: Used at inference time to split an image into multiple patches, super resolve each patch, and then reassemble them, following the aggregation sampling method described in [this paper](https://arxiv.org/abs/2305.07015).
 
+- **qr_code_builder.py**: Generates a QR code based on the provided URL.
 
-In the **models_run** folder there are the different models with their weights and some results relative to the dataset they are trained on. 
+### Generative Part
+
+- **train_diffusion_generation.py** and **UNet_model_generation.py**: Training and UNet model files for generating new images, located in the **generate_new_imgs** folder.
+
+- **utils.py**: Similar to the one in the main folder but without data folder and dataset creation functions. In this case, the data folder must contain a separate folder for each class, with images inside each class folder.
+
+- **imgs_generator.py**: Equivalent to superres_and_NDVIgen.py but for the generative case.
+
+### Models Run
+
+- **models_run**: Contains different models with their weights and some results relative to the datasets they were trained on.
+
 
 🚧🚧🚧🚧🚧  WORK IN PROGRESS 🚧🚧🚧🚧🚧
 
