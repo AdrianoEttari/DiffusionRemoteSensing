@@ -1,5 +1,7 @@
 # Adaptation of Diffusion Models for Remote Sensing Imagery
 
+In this repository, I adapted the Diffusion Models to Remote Sensing images for three different tasks: Super Resolution, Image Generation, and SAR to NDVI conversion.
+
 ## Summary of the Files and Folders 
 
 - **train_diffusion_superres.py**: Contains the diffusion model class with all necessary functions for sampling and training.
