@@ -44,7 +44,7 @@ In **degradation_from_BSRGAN.py** there are functions taken from https://github.
 
 [<img src="assets/imgsli_up42.png" height="400px"/>](https://imgsli.com/Mjc2NjAw)
 
-Here is a video showcasing the denoising process for the super resolution problem of the Sentinel-2 dataset:
+Here is a 25 seconds video showcasing the denoising process for the super resolution problem of the Sentinel-2 dataset:
 
 ![Video Denoising](https://github.com/AdrianoEttari/DiffusionRemoteSensing/blob/main/assets/UP42_SUPERRESOLUTION/DownBlur/up42_superresolution.gif)
 
