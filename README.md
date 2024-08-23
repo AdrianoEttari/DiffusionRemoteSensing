@@ -60,7 +60,7 @@ NDVI G.T. stands for Ground Truth NDVI, while NDVI PRED. stands for the predicte
 
 <img src="assets/SAR_to_NDVI.png" height="400px"/>
 
-## TODO
+## TO DO
 - [ ] Add MultiHead Attention from Vision Transformer 
 - [ ] Incorporate the Diffusion Model in a Latent Diffusion Model
 - [ ] Substitute the simple Blur-Down-Gauss degradation with the BSR-degradation algorithm
