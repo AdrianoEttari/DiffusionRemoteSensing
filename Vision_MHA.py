@@ -4,11 +4,13 @@ import torch.nn as nn
 from PIL import Image
 from torchvision.transforms import ToTensor
 from torchinfo import summary
+import torch.nn.functional as F
 # %%
 class ImageEncoding(nn.Module):
-    def __init__(self, input_channels, patch_size = (16,16), stride = None, embedding_dim:int = None):
+    def __init__(self, input_channels,image_size, patch_size = (16,16), stride = None, embedding_dim:int = None):
         super().__init__()
 
+        self.image_size = image_size
         self.patch_size = patch_size
 
         if stride is None:
@@ -25,6 +27,11 @@ class ImageEncoding(nn.Module):
         self.flatten = nn.Flatten(start_dim=2, end_dim=3) # (batch_size, embedding_dim, num_patches_y, num_patches_x) -> (batch_size, embedding_dim, num_patches)
     
     def forward(self, x):
+        if x.shape[-1] != self.image_size:
+            try:
+                x = F.interpolate(x, size=(self.image_size, self.image_size), mode='bicubic')
+            except:
+                x = F.interpolate(x.to('cpu'), size=(self.image_size, self.image_size), mode='bilinear').to(x.device)
         # x = (batch_size, channel, height, width)
         x = self.conv(x) # (batch_size, embedding_dim, num_patches_y, num_patches_x)
         x = self.flatten(x) # (batch_size, embedding_dim, num_patches)
@@ -37,22 +44,21 @@ class PositionalEncoding_without_CLS_param(nn.Module):
     def __init__(self, image_size, batch_size, embedding_dim, patch_size=(16,16)) -> None:
         super().__init__()
         # create the token embedding
+        self.image_size = image_size
         self.embedding_dim = embedding_dim
-
         # create the positional embedding, in the paper it is used a standard learnable 1D position embeddings
-        self.num_patch = image_size[0]*image_size[1] // (patch_size[0]*patch_size[1])
+        self.num_patch = self.image_size*self.image_size // (patch_size[0]*patch_size[1])
         self.position_emb = nn.Parameter(torch.rand(1, self.num_patch, self.embedding_dim), requires_grad=True)
-
+        
     def forward(self, x):
         x = x + self.position_emb
         return x
     
 class Embedding(nn.Module):
-
     def __init__(self, input_channels, image_size, batch_size, patch_size = (16,16), stride = None, embedding_dim=None) -> None:
         super().__init__()
 
-        self.image_embedding = ImageEncoding(input_channels, patch_size, stride, embedding_dim)
+        self.image_embedding = ImageEncoding(input_channels, image_size, patch_size, stride, embedding_dim)
         self.embedding_dim = self.image_embedding.embedding_dim  
         self.positional_encoding = PositionalEncoding_without_CLS_param(image_size, batch_size, self.embedding_dim, patch_size)
         self.num_patches = self.positional_encoding.num_patch
@@ -90,6 +96,7 @@ class MultiheadAttention(nn.Module):
 
     def forward(self, q,k,v ,mask= None):
         # q,k,v = (batch_size, num_patches+1, embedding_dim)
+
         q1 = self.w_q(q)
         k1 = self.w_k(k)
         v1 = self.w_v(v)
@@ -111,29 +118,44 @@ class MultiheadAttention(nn.Module):
 class Vision_MHA(nn.Module):
     def __init__(self,image_size, input_channels, patch_size, batch_size, num_heads, embedding_dropout=0.1, embedding_dim=None):
         super().__init__()
+
         self.batch_size = batch_size
-        self.embedding1 = Embedding(input_channels, image_size, batch_size, patch_size, embedding_dim = embedding_dim)
-        self.embedding2 = Embedding(input_channels, image_size, batch_size, patch_size, embedding_dim = embedding_dim)
-        self.embedding_dim = self.embedding1.embedding_dim
+        self.embedding = Embedding(input_channels, image_size, batch_size, patch_size, embedding_dim = embedding_dim)
+        # self.embedding1 = Embedding(input_channels, image_size, batch_size, patch_size, embedding_dim = embedding_dim)
+        # self.embedding2 = Embedding(input_channels, image_size, batch_size, patch_size, embedding_dim = embedding_dim)
+        # self.embedding_dim = self.embedding1.embedding_dim
+        self.embedding_dim = self.embedding.embedding_dim
         self.dropout = nn.Dropout(embedding_dropout)
         self_attention_block = MultiheadAttention(num_heads, self.embedding_dim)
-        self.num_patches = self.embedding1.num_patches
-        self.norm1 = nn.LayerNorm(normalized_shape=[self.num_patches, self_attention_block.embedding_dim])
-        self.norm2 = nn.LayerNorm(normalized_shape=[self.num_patches, self_attention_block.embedding_dim])
+        # self.num_patches = self.embedding1.num_patches
+        self.num_patches = self.embedding.num_patches
+        self.norm = nn.LayerNorm(normalized_shape=[self.num_patches, self_attention_block.embedding_dim])
+        # self.norm1 = nn.LayerNorm(normalized_shape=[self.num_patches, self_attention_block.embedding_dim])
+        # self.norm2 = nn.LayerNorm(normalized_shape=[self.num_patches, self_attention_block.embedding_dim])
         self.self_attention_block = self_attention_block
         self.deconv = nn.ConvTranspose2d(in_channels=self.embedding_dim, out_channels=input_channels, kernel_size=patch_size, stride=patch_size) # ADJUST THE STRIDE THAT IS SPECIFIC FOR WHEN STRIDE IS NOT PROVIDED
         
     def forward(self, q,k):
-        q = self.embedding1(q)
-        q = self.dropout(q)
-        k = self.embedding2(k)
-        k = self.dropout(k)
+        
+        # q = self.embedding1(q)
+        # q = self.dropout(q)
+        # k = self.embedding2(k)
+        # k = self.dropout(k)
 
-        q = self.norm1(q)
-        k = self.norm2(k)
+        # q = self.norm1(q)
+        # k = self.norm2(k)
+        q = self.embedding(q)
+        q = self.dropout(q)
+
+        k = self.embedding(k)
+        k = self.dropout(k)
+        
+        q = self.norm(q)
+        k = self.norm(k)
 
         x = self.self_attention_block(q,k,k)
         x = x.transpose(1,2)
+
         reverse_x = x.view(self.batch_size, self.embedding_dim, int(self.num_patches**0.5), int(self.num_patches**0.5))
         deconv_reverse_x = self.deconv(reverse_x)
         return deconv_reverse_x

@@ -209,8 +209,8 @@ class RRDB(nn.Module):
 ################################################ Models #################################################
 #########################################################################################################
 
-class Residual_Attention_UNet_superres(nn.Module):
-    def __init__(self, image_channels=3, out_dim=3, device=None):
+class Residual_Attention_UNet_superres_VMHA(nn.Module):
+    def __init__(self, image_channels=3, out_dim=3, image_size=None, batch_size=None, device=None):
         super().__init__()
         self.image_channels = image_channels
         self.down_channels = (16,32,64,128,256) # Note that there are 4 downsampling layers and 4 upsampling layers.
@@ -218,6 +218,11 @@ class Residual_Attention_UNet_superres(nn.Module):
         # has a Conv2D(16,32), the second layer has a Conv2D(32,64) and the third layer has a Conv2D(64,128)...
         self.up_channels = (256,128,64,32,16) # Note that the last channel is not used in the upsampling (it goes from up_channels[-2] to out_dim)
         self.out_dim = out_dim 
+
+        self.image_size = image_size
+        self.batch_size = batch_size
+        self.image_sizes = [self.image_size//(2**i) for i in range(len(self.up_channels)-2)][::-1]
+
         self.time_emb_dim = 100 # Refers to the number of dimensions or features used to represent time.
         self.device = device
         # It's important to note that the dimensionality of time embeddings should be chosen carefully,
@@ -255,8 +260,8 @@ class Residual_Attention_UNet_superres(nn.Module):
             gating_signal(self.up_channels[i], self.up_channels[i+1], self.device) \
             for i in range(len(self.up_channels)-2)])
         
-        self.attention_blocks = nn.ModuleList([
-            AttentionBlock(self.up_channels[i+1], self.up_channels[i+1], self.up_channels[i+1], self.device) \
+        self.visual_mh_attention_blocks = nn.ModuleList([
+            Vision_MHA(image_size=self.image_sizes[i], input_channels=self.up_channels[i+1], patch_size=(8,8), batch_size=self.batch_size, num_heads=2, embedding_dropout=0.1, embedding_dim=None)\
             for i in range(len(self.up_channels)-2)])
         
         self.ups = nn.ModuleList([
@@ -315,9 +320,10 @@ class Residual_Attention_UNet_superres(nn.Module):
         x = self.bottle_neck(x, t, None)
 
         # UNET (UPSAMPLE)
-        for i, (gating_signal, attention_block, up, up_conv) in enumerate(zip(self.gating_signals,self.attention_blocks,self.ups, self.up_convs)):
+        for i, (gating_signal, visual_mh_attention_block, up, up_conv) in enumerate(zip(self.gating_signals,self.visual_mh_attention_blocks,self.ups, self.up_convs)):
+
             gating = gating_signal(x)
-            attention = attention_block(residual_inputs[-(i+1)], gating)
+            attention = visual_mh_attention_block(residual_inputs[-(i+1)], gating)
             x = up(x, t)
             x = torch.cat([x, attention], dim=1)
             x = up_conv(x)

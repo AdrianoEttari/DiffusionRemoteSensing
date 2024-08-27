@@ -11,7 +11,7 @@ from utils import get_data_superres, get_data_superres_BSRGAN, video_maker
 import copy
 
 from UNet_model_superres import Residual_Attention_UNet_superres, EMA
-
+from UNet_model_superres_VMHA import Residual_Attention_UNet_superres_VMHA, EMA
 import torch
 import torch.nn as nn
 import torchvision.models as models
@@ -649,9 +649,13 @@ def launch(args):
         # model = Residual_MultiHeadAttention_UNet_superres(input_channels, output_channels, device).to(device)
     elif UNet_type.lower() == 'residual visual multihead attention unet':
         print('Using Residual Visual MultiHead Attention UNet')
-        # model = Residual_Visual_MultiHeadAttention_UNet_superres(input_channels, image_size ,output_channels, device).to(device)
+        model = Residual_Attention_UNet_superres_VMHA(input_channels, output_channels, image_size=train_dataset[0][1].shape[-1],batch_size=next(iter(train_loader))[0].shape[0], device=device).to(device) # The images must be squared
     else:
         raise ValueError('The UNet type must be Residual Attention UNet or Residual MultiHead Attention UNet or Residual Visual MultiHeadAttention UNet superres')
+    
+    # for name, param in model.named_parameters():
+    #     print(f"Layer: {name} | Size: {param.size()} | Number of Parameters: {param.numel()}")
+
     print("Num params: ", sum(p.numel() for p in model.parameters()))
 
     if multiple_gpus:
