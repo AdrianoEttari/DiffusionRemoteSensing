@@ -2,7 +2,6 @@
 import torch
 import torch.nn as nn
 from PIL import Image
-from torchvision.transforms import ToTensor
 from torchinfo import summary
 import torch.nn.functional as F
 # %%

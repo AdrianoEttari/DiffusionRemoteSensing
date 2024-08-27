@@ -3,7 +3,6 @@ import math
 import torch
 import torch.nn.functional as F
 from Vision_MHA import Vision_MHA
-from einops import rearrange
 
 #########################################################################################################
 #################################### Classes for all the UNet models ####################################
