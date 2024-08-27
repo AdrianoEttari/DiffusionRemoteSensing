@@ -628,11 +628,11 @@ def launch(args):
         raise ValueError('The degradation type must be either BSRGAN or DownBlur or DownBlurNoise')
 
     if multiple_gpus:
-        train_loader = DataLoader(dataset=train_dataset, batch_size=batch_size, shuffle=False, sampler=DistributedSampler(train_dataset))
-        val_loader = DataLoader(dataset=val_dataset, batch_size=batch_size,shuffle=False, sampler=DistributedSampler(val_dataset))
+        train_loader = DataLoader(dataset=train_dataset, batch_size=batch_size, shuffle=False, sampler=DistributedSampler(train_dataset),drop_last=True)
+        val_loader = DataLoader(dataset=val_dataset, batch_size=batch_size,shuffle=False, sampler=DistributedSampler(val_dataset),drop_last=True)
     else:
-        train_loader = DataLoader(dataset=train_dataset, batch_size=batch_size, shuffle=True)
-        val_loader = DataLoader(dataset=val_dataset, batch_size=batch_size, shuffle=True)
+        train_loader = DataLoader(dataset=train_dataset, batch_size=batch_size, shuffle=True, drop_last=True)
+        val_loader = DataLoader(dataset=val_dataset, batch_size=batch_size, shuffle=True, drop_last=True)
 
     if multiple_gpus:
         gpu_id = int(os.environ["LOCAL_RANK"])
@@ -649,7 +649,7 @@ def launch(args):
         # model = Residual_MultiHeadAttention_UNet_superres(input_channels, output_channels, device).to(device)
     elif UNet_type.lower() == 'residual visual multihead attention unet':
         print('Using Residual Visual MultiHead Attention UNet')
-        model = Residual_Attention_UNet_superres_VMHA(input_channels, output_channels, image_size=train_dataset[0][1].shape[-1],batch_size=next(iter(train_loader))[0].shape[0], device=device).to(device) # The images must be squared
+        model = Residual_Attention_UNet_superres_VMHA(input_channels, output_channels, image_size=train_dataset[0][1].shape[-1], device=device).to(device) # The images must be squared
     else:
         raise ValueError('The UNet type must be Residual Attention UNet or Residual MultiHead Attention UNet or Residual Visual MultiHeadAttention UNet superres')
     

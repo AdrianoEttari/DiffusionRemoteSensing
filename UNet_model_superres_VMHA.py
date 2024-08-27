@@ -210,7 +210,7 @@ class RRDB(nn.Module):
 #########################################################################################################
 
 class Residual_Attention_UNet_superres_VMHA(nn.Module):
-    def __init__(self, image_channels=3, out_dim=3, image_size=None, batch_size=None, device=None):
+    def __init__(self, image_channels=3, out_dim=3, image_size=None, device=None):
         super().__init__()
         self.image_channels = image_channels
         self.down_channels = (16,32,64,128,256) # Note that there are 4 downsampling layers and 4 upsampling layers.
@@ -220,7 +220,6 @@ class Residual_Attention_UNet_superres_VMHA(nn.Module):
         self.out_dim = out_dim 
 
         self.image_size = image_size
-        self.batch_size = batch_size
         self.image_sizes = [self.image_size//(2**i) for i in range(len(self.up_channels)-2)][::-1]
 
         self.time_emb_dim = 100 # Refers to the number of dimensions or features used to represent time.
@@ -261,7 +260,7 @@ class Residual_Attention_UNet_superres_VMHA(nn.Module):
             for i in range(len(self.up_channels)-2)])
         
         self.visual_mh_attention_blocks = nn.ModuleList([
-            Vision_MHA(image_size=self.image_sizes[i], input_channels=self.up_channels[i+1], patch_size=(8,8), batch_size=self.batch_size, num_heads=4, embedding_dropout=0.1, embedding_dim=None)\
+            Vision_MHA(image_size=self.image_sizes[i], input_channels=self.up_channels[i+1], patch_size=(8,8), num_heads=4, embedding_dropout=0.1, embedding_dim=None)\
             for i in range(len(self.up_channels)-2)])
         
         self.ups = nn.ModuleList([

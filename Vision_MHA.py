@@ -41,7 +41,7 @@ class ImageEncoding(nn.Module):
     
 class PositionalEncoding_without_CLS_param(nn.Module):
 
-    def __init__(self, image_size, batch_size, embedding_dim, patch_size=(16,16)) -> None:
+    def __init__(self, image_size, embedding_dim, patch_size=(16,16)) -> None:
         super().__init__()
         # create the token embedding
         self.image_size = image_size
@@ -55,12 +55,12 @@ class PositionalEncoding_without_CLS_param(nn.Module):
         return x
     
 class Embedding(nn.Module):
-    def __init__(self, input_channels, image_size, batch_size, patch_size = (16,16), stride = None, embedding_dim=None) -> None:
+    def __init__(self, input_channels, image_size, patch_size = (16,16), stride = None, embedding_dim=None) -> None:
         super().__init__()
 
         self.image_embedding = ImageEncoding(input_channels, image_size, patch_size, stride, embedding_dim)
         self.embedding_dim = self.image_embedding.embedding_dim  
-        self.positional_encoding = PositionalEncoding_without_CLS_param(image_size, batch_size, self.embedding_dim, patch_size)
+        self.positional_encoding = PositionalEncoding_without_CLS_param(image_size, self.embedding_dim, patch_size)
         self.num_patches = self.positional_encoding.num_patch
 
     def forward(self, x):
@@ -116,34 +116,20 @@ class MultiheadAttention(nn.Module):
         return x
       
 class Vision_MHA(nn.Module):
-    def __init__(self,image_size, input_channels, patch_size, batch_size, num_heads, embedding_dropout=0.1, embedding_dim=None):
+    def __init__(self,image_size, input_channels, patch_size, num_heads, embedding_dropout=0.1, embedding_dim=None):
         super().__init__()
 
-        self.batch_size = batch_size
-        self.embedding = Embedding(input_channels, image_size, batch_size, patch_size, embedding_dim = embedding_dim)
-        # self.embedding1 = Embedding(input_channels, image_size, batch_size, patch_size, embedding_dim = embedding_dim)
-        # self.embedding2 = Embedding(input_channels, image_size, batch_size, patch_size, embedding_dim = embedding_dim)
-        # self.embedding_dim = self.embedding1.embedding_dim
+        self.embedding = Embedding(input_channels, image_size, patch_size, embedding_dim = embedding_dim)
         self.embedding_dim = self.embedding.embedding_dim
         self.dropout = nn.Dropout(embedding_dropout)
         self_attention_block = MultiheadAttention(num_heads, self.embedding_dim)
-        # self.num_patches = self.embedding1.num_patches
         self.num_patches = self.embedding.num_patches
         self.norm = nn.LayerNorm(normalized_shape=[self.num_patches, self_attention_block.embedding_dim])
-        # self.norm1 = nn.LayerNorm(normalized_shape=[self.num_patches, self_attention_block.embedding_dim])
-        # self.norm2 = nn.LayerNorm(normalized_shape=[self.num_patches, self_attention_block.embedding_dim])
         self.self_attention_block = self_attention_block
         self.deconv = nn.ConvTranspose2d(in_channels=self.embedding_dim, out_channels=input_channels, kernel_size=patch_size, stride=patch_size) # ADJUST THE STRIDE THAT IS SPECIFIC FOR WHEN STRIDE IS NOT PROVIDED
         
     def forward(self, q,k):
-        
-        # q = self.embedding1(q)
-        # q = self.dropout(q)
-        # k = self.embedding2(k)
-        # k = self.dropout(k)
-
-        # q = self.norm1(q)
-        # k = self.norm2(k)
+        batch_size = q.shape[0]
         q = self.embedding(q)
         q = self.dropout(q)
 
@@ -156,7 +142,8 @@ class Vision_MHA(nn.Module):
         x = self.self_attention_block(q,k,k)
         x = x.transpose(1,2)
 
-        reverse_x = x.view(self.batch_size, self.embedding_dim, int(self.num_patches**0.5), int(self.num_patches**0.5))
+        reverse_x = x.view(batch_size, self.embedding_dim, int(self.num_patches**0.5), int(self.num_patches**0.5))
+    
         deconv_reverse_x = self.deconv(reverse_x)
         return deconv_reverse_x
     
@@ -165,23 +152,12 @@ if __name__ == '__main__':
     import torch
     import torch.nn as nn
 
-    # image_size = (28,28)
-    # input_channels = 1
-    # patch_size = (7,7)
-    # batch_size = 64
-    # num_heads = 7
-    # mlp_dim = 128
-    # num_enc_layers = 4 
-    # n_classes = 10
 
     image_size = (224,224)
     input_channels = 3
     patch_size = (16,16)
     batch_size = 64
     num_heads = 4
-    mlp_dim = 128
-    num_enc_layers = 4 
-    n_classes = 10
     device = 'mps'
 
     model = Vision_MHA(image_size, input_channels, patch_size, batch_size, num_heads, embedding_dropout=0.1, embedding_dim=None).to(device)
