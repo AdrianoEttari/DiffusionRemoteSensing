@@ -261,7 +261,7 @@ class Residual_Attention_UNet_superres_VMHA(nn.Module):
             for i in range(len(self.up_channels)-2)])
         
         self.visual_mh_attention_blocks = nn.ModuleList([
-            Vision_MHA(image_size=self.image_sizes[i], input_channels=self.up_channels[i+1], patch_size=(8,8), batch_size=self.batch_size, num_heads=2, embedding_dropout=0.1, embedding_dim=None)\
+            Vision_MHA(image_size=self.image_sizes[i], input_channels=self.up_channels[i+1], patch_size=(8,8), batch_size=self.batch_size, num_heads=4, embedding_dropout=0.1, embedding_dim=None)\
             for i in range(len(self.up_channels)-2)])
         
         self.ups = nn.ModuleList([
