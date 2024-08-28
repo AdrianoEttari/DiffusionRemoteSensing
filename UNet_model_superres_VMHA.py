@@ -319,7 +319,6 @@ class Residual_Attention_UNet_superres_VMHA(nn.Module):
 
         # UNET (UPSAMPLE)
         for i, (gating_signal, visual_mh_attention_block, up, up_conv) in enumerate(zip(self.gating_signals,self.visual_mh_attention_blocks,self.ups, self.up_convs)):
-
             gating = gating_signal(x)
             attention = visual_mh_attention_block(residual_inputs[-(i+1)], gating)
             x = up(x, t)
@@ -328,11 +327,6 @@ class Residual_Attention_UNet_superres_VMHA(nn.Module):
 
         return self.output(x)
     
-#########################################################################################################
-########################################## WORK IN PROGRESS #############################################
-#########################################################################################################
-
-
 if __name__=="__main__":
     input_channels=3
     output_channels=3
