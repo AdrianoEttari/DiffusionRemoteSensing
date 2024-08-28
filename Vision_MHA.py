@@ -141,6 +141,7 @@ class Vision_MHA(nn.Module):
         k = self.norm(k)
 
         x = self.self_attention_block(q,k,k)
+
         x = x.transpose(1,2)
 
         reverse_x = x.view(batch_size, self.embedding_dim, int(self.num_patches**0.5), int(self.num_patches**0.5))
