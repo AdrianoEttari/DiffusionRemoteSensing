@@ -334,9 +334,13 @@ class Residual_Attention_UNet_superres_VMHA(nn.Module):
 
 
 if __name__=="__main__":
-    model = Residual_Attention_UNet_superres(device='cpu')
-    # model = Residual_MultiHeadAttention_UNet_superres(device='cpu')
-    # model = Residual_Visual_MultiHeadAttention_UNet_superres(start_image_size=224,device='cpu')
+    input_channels=3
+    output_channels=3
+    image_size=224
+    device='cpu'
+    x = torch.randn((1,input_channels,image_size,image_size))
+
+    model = Residual_Attention_UNet_superres_VMHA(input_channels, output_channels, image_size=image_size, device=device).to(device) # The images must be squared
 
     def print_parameter_count(model):
         total_params = 0

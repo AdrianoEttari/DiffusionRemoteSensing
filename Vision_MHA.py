@@ -45,6 +45,7 @@ class PositionalEncoding_without_CLS_param(nn.Module):
         # create the token embedding
         self.image_size = image_size
         self.embedding_dim = embedding_dim
+        self.patch_size = patch_size
         # create the positional embedding, in the paper it is used a standard learnable 1D position embeddings
         self.num_patch = self.image_size*self.image_size // (patch_size[0]*patch_size[1])
         self.position_emb = nn.Parameter(torch.rand(1, self.num_patch, self.embedding_dim), requires_grad=True)
@@ -111,8 +112,6 @@ class MultiheadAttention(nn.Module):
 
         x = self.w_o(x)
         return x
-
-        return x
       
 class Vision_MHA(nn.Module):
     def __init__(self,image_size, input_channels, patch_size, num_heads, embedding_dropout=0.1, embedding_dim=None):
@@ -126,6 +125,9 @@ class Vision_MHA(nn.Module):
         self.norm = nn.LayerNorm(normalized_shape=[self.num_patches, self_attention_block.embedding_dim])
         self.self_attention_block = self_attention_block
         self.deconv = nn.ConvTranspose2d(in_channels=self.embedding_dim, out_channels=input_channels, kernel_size=patch_size, stride=patch_size) # ADJUST THE STRIDE THAT IS SPECIFIC FOR WHEN STRIDE IS NOT PROVIDED
+        
+        if image_size % patch_size[0] != 0:
+            raise ValueError(f"Image size {image_size} must be divisible by patch size {patch_size[0]}")
         
     def forward(self, q,k):
         batch_size = q.shape[0]
