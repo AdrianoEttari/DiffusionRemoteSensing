@@ -117,6 +117,7 @@ class Vision_MHA(nn.Module):
     def __init__(self,image_size, input_channels, patch_size, num_heads, embedding_dropout=0.1, embedding_dim=None):
         super().__init__()
 
+        self.patch_size = patch_size
         self.embedding = Embedding(input_channels, image_size, patch_size, embedding_dim = embedding_dim)
         self.embedding_dim = self.embedding.embedding_dim
         self.dropout = nn.Dropout(embedding_dropout)
@@ -125,7 +126,7 @@ class Vision_MHA(nn.Module):
         self.norm = nn.LayerNorm(normalized_shape=[self.num_patches, self_attention_block.embedding_dim])
         self.self_attention_block = self_attention_block
         self.deconv = nn.ConvTranspose2d(in_channels=self.embedding_dim, out_channels=input_channels, kernel_size=patch_size, stride=patch_size) # ADJUST THE STRIDE THAT IS SPECIFIC FOR WHEN STRIDE IS NOT PROVIDED
-        
+        # self.conv_interpolation = nn.Conv2d(in_channels=self.embedding_dim, out_channels=input_channels,kernel_size=3,padding=1,stride=1) # ALTERNATIVE TO DECONV (I.E. WE FIRST INTERPOLATE THE IMAGE ADN THEN CONVOLVE IT)
         if image_size % patch_size[0] != 0:
             raise ValueError(f"Image size {image_size} must be divisible by patch size {patch_size[0]}")
         
@@ -143,10 +144,14 @@ class Vision_MHA(nn.Module):
         x = self.self_attention_block(q,k,k)
 
         x = x.transpose(1,2)
-
         reverse_x = x.view(batch_size, self.embedding_dim, int(self.num_patches**0.5), int(self.num_patches**0.5))
-    
+
+        # The interpolation and then convolution (depending on the kernel size in the convolution) have less parameters than the transpose convolution, but need much more time to be computed
+        # resized_reverse_x = F.interpolate(reverse_x.to('cpu'), size=(reverse_x.shape[-1]*self.patch_size[0], reverse_x.shape[-1]*self.patch_size[0]), mode='bicubic', align_corners=False).to(reverse_x.device)
+        # conv_resized_reverse_x = self.conv_interpolation(resized_reverse_x)
+
         deconv_reverse_x = self.deconv(reverse_x)
+
         return deconv_reverse_x
     
 
@@ -155,18 +160,28 @@ if __name__ == '__main__':
     import torch.nn as nn
 
 
-    image_size = (224,224)
-    input_channels = 3
-    patch_size = (16,16)
-    batch_size = 64
+    image_size = 256
+    input_channels = 32
+    patch_size = (8,8)
+    batch_size = 4
     num_heads = 4
     device = 'mps'
 
-    model = Vision_MHA(image_size, input_channels, patch_size, batch_size, num_heads, embedding_dropout=0.1, embedding_dim=None).to(device)
-    x = torch.randn((batch_size, input_channels, image_size[0], image_size[1])).to(device)
+    import time
 
-    VMHA_output = model(x,x)
 
+    model = Vision_MHA(image_size=image_size, input_channels=input_channels, patch_size=patch_size, num_heads=num_heads, embedding_dropout=0.1, embedding_dim=None).to(device)
+    print("Num params: ", sum(p.numel() for p in model.parameters()))
+
+    total_minutes=0
+    for i in range(5):
+        x = torch.randn((batch_size, input_channels, image_size, image_size)).to(device)
+        start = time.time()
+        VMHA_output = model(x,x)
+        end = time.time()
+        total_minutes += (end-start)/60
+
+    print("Time: ", total_minutes)
     print(x.shape)
     print(VMHA_output.shape)
 
