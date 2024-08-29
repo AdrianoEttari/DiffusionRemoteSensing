@@ -258,7 +258,7 @@ class Residual_Attention_UNet_superres_VMHA(nn.Module):
             gating_signal(self.up_channels[i], self.up_channels[i+1], self.device) \
             for i in range(len(self.up_channels)-2)])
         
-        self.visual_mh_attention_blocks = nn.ModuleList([
+        self.vision_mh_attention_blocks = nn.ModuleList([
             Vision_MHA(image_size=self.image_sizes[i], input_channels=self.up_channels[i+1], patch_size=(8,8), num_heads=4, embedding_dropout=0.1, embedding_dim=None)\
             for i in range(len(self.up_channels)-2)])
         
@@ -318,9 +318,9 @@ class Residual_Attention_UNet_superres_VMHA(nn.Module):
         x = self.bottle_neck(x, t, None)
 
         # UNET (UPSAMPLE)
-        for i, (gating_signal, visual_mh_attention_block, up, up_conv) in enumerate(zip(self.gating_signals,self.visual_mh_attention_blocks,self.ups, self.up_convs)):
+        for i, (gating_signal, vision_mh_attention_block, up, up_conv) in enumerate(zip(self.gating_signals,self.vision_mh_attention_blocks,self.ups, self.up_convs)):
             gating = gating_signal(x)
-            attention = visual_mh_attention_block(residual_inputs[-(i+1)], gating)
+            attention = vision_mh_attention_block(residual_inputs[-(i+1)], gating)
             x = up(x, t)
             x = torch.cat([x, attention], dim=1)
             x = up_conv(x)

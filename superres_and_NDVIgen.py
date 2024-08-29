@@ -2,6 +2,7 @@ import torch
 import os
 from torchvision import transforms
 from UNet_model_superres import Residual_Attention_UNet_superres
+from UNet_model_superres_VMHA import Residual_Attention_UNet_superres_VMHA
 from train_diffusion_superres import Diffusion as Diffusion_superres
 import matplotlib.pyplot as plt
 from PIL import Image, ImageFilter
@@ -11,7 +12,7 @@ from UNet_model_SAR_TO_NDVI import Residual_Attention_UNet_SAR_TO_NDVI
 from train_diffusion_SAR_TO_NDVI import Diffusion as Diffusion_SAR_TO_NDVI
 import matplotlib.pyplot as plt
 
-def super_resolver(lr_img, device, model_name):
+def super_resolver(lr_img, device, model_name, model='Residual Attention Unet'):
         '''
         This function takes a low resolution image, a device and a specific model_name and returns a super resolved image.
         Notice that the model_name must be formatted in a precise way. For example:
@@ -32,7 +33,11 @@ def super_resolver(lr_img, device, model_name):
 
         input_channels = output_channels = lr_img.shape[0]
 
-        model = Residual_Attention_UNet_superres(input_channels, output_channels, device).to(device)
+        if model.lower() == 'residual attention unet':
+                model = Residual_Attention_UNet_superres(input_channels, output_channels, device).to(device)
+        elif model.lower() == 'residual vision multihead attention unet':
+               model = Residual_Attention_UNet_superres_VMHA(input_channels, output_channels, image_size=image_size, device=device).to(device)
+
         snapshot_path = os.path.join('models_run', model_name, 'weights', 'snapshot.pt')
 
         print(f'HR Image size: {image_size}, LR Image size: {image_size//magnification_factor} Magnification factor: {magnification_factor}, Channels: {input_channels}')
@@ -168,16 +173,37 @@ def plot_SAR_NDVI(SAR_img, NDVI_img, NDVI_pred_img, save_path=None):
 
     
 if __name__ == '__main__':
-        device = 'mps'
-        img_path = os.path.join('assets','Other','up42_sample_lr.png')
-        to_tensor = transforms.ToTensor()
-        lr_img = to_tensor(Image.open(img_path)).to(device)
-        model_name = 'Residual_Attention_UNet_superres_magnification2_LRimgsize128_up42_sentinel2_patches_downblur'
-        superres_img = super_resolver(lr_img, device, model_name)
-        file_name = os.path.basename(img_path)
-        save_path = os.path.join('assets','Other',file_name.replace('lr', 'sr'))
-        plot_lr_sr(lr_img, superres_img, histogram=False, save_path=save_path)
+        #### SUPER RESOLUTION EXAMPLE ####
+        # device = 'mps'
+        # img_path = os.path.join('assets','Other','up42_sample_lr.png')
+        # to_tensor = transforms.ToTensor()
+        # lr_img = to_tensor(Image.open(img_path)).to(device)
+        # model_name = 'Residual_Attention_UNet_superres_magnification2_LRimgsize128_up42_sentinel2_patches_downblur'
+        # superres_img = super_resolver(lr_img, device, model_name,model='Residual Attention Unet')
+        # file_name = os.path.basename(img_path)
+        # save_path = os.path.join('assets','Other',file_name.replace('lr', 'sr'))
+        # plot_lr_sr(lr_img, superres_img, histogram=False, save_path=save_path)
 
+
+        #### SUPER RESOLUTION EXAMPLE ####
+        device = 'mps'
+        img_path = os.path.join('celebA_10k','test_original','000114.jpg')
+        img = Image.open(img_path)
+        img = img.resize((192,192))
+        downsample = transforms.Resize((img.size[0] // 4, img.size[1] // 4),
+                                       interpolation=transforms.InterpolationMode.BICUBIC)
+        img = downsample(img)
+
+        to_tensor = transforms.ToTensor()
+        lr_img = to_tensor(img).to(device)
+
+        model_name = 'Residual_VisionMultiHeadAttention_UNet_superres_magnification4_LRimgsize48_CelebA100k_downblur_4'
+        superres_img = super_resolver(lr_img, device, model_name,model='Residual Vision Multihead Attention Unet')
+        file_name = os.path.basename(img_path)
+        plot_lr_sr(lr_img, superres_img, histogram=False)
+
+        #### SAR TO NDVI EXAMPLE ####
+        # device = 'mps'
         # test_path = os.path.join('imgs_sample', 'test_SAR_TO_NDVI')
         # list_of_files = ['Victoria_0_20210830_patch_289.pt']
         # SAR_img_path = os.path.join(test_path, 'sar', list_of_files[0])

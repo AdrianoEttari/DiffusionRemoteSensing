@@ -301,7 +301,7 @@ class Diffusion:
             self.model.module.load_state_dict(model_state)
             self.model.module.to(self.device)
         else:
-            snapshot = torch.load(self.snapshot_path, map_location=self.device)
+            snapshot = torch.load(self.snapshot_path, map_location=self.device, weights_only=True)
             self.model.load_state_dict(snapshot["MODEL_STATE"])
 
         self.epochs_run = snapshot["EPOCHS_RUN"]
@@ -533,7 +533,7 @@ def launch(args):
         generate_video: if True, the function will produce a video with the generated NDVI images.
         magnification_factor: the magnification factor (i.e. the factor by which the image is magnified in the super-resolution task)
         loss: the loss function to use
-        UNet_type: the type of UNet to use (attention unet, residual attention unet, residual attention unet 2, residual multihead attention unet, residual visual multihead attention unet)
+        UNet_type: the type of UNet to use (attention unet, residual attention unet, residual attention unet 2, residual multihead attention unet, residual vision multihead attention unet)
         Degradation_type: the type of degradation to use (downblur, bsrgan, downblurnoise)
         num_crops: the number of crops to use
         multiple_gpus: if True, the function will use multiple GPUs
@@ -647,11 +647,11 @@ def launch(args):
     elif UNet_type.lower() == 'residual multihead attention unet':
         print('Using Residual MultiHead Attention UNet')
         # model = Residual_MultiHeadAttention_UNet_superres(input_channels, output_channels, device).to(device)
-    elif UNet_type.lower() == 'residual visual multihead attention unet':
-        print('Using Residual Visual MultiHead Attention UNet')
+    elif UNet_type.lower() == 'residual vision multihead attention unet':
+        print('Using Residual Vision MultiHead Attention UNet')
         model = Residual_Attention_UNet_superres_VMHA(input_channels, output_channels, image_size=train_dataset[0][1].shape[-1], device=device).to(device) # The images must be squared
     else:
-        raise ValueError('The UNet type must be Residual Attention UNet or Residual MultiHead Attention UNet or Residual Visual MultiHeadAttention UNet superres')
+        raise ValueError('The UNet type must be Residual Attention UNet or Residual MultiHead Attention UNet or Residual Vision MultiHeadAttention UNet superres')
     
     # for name, param in model.named_parameters():
     #     print(f"Layer: {name} | Size: {param.size()} | Number of Parameters: {param.numel()}")
@@ -720,7 +720,7 @@ if __name__ == '__main__':
     parser.add_argument('--generate_video', type=str2bool, nargs='?', const=True, default=False)
     parser.add_argument('--loss', type=str)
     parser.add_argument('--magnification_factor', type=int)
-    parser.add_argument('--UNet_type', type=str, default='Residual Attention UNet') # 'Residual Attention UNet' or 'Residual MultiHead Attention UNet' or 'Residual Visual MultiHead Attention UNet'
+    parser.add_argument('--UNet_type', type=str, default='Residual Attention UNet') # 'Residual Attention UNet' or 'Residual MultiHead Attention UNet' or 'Residual Vision MultiHead Attention UNet'
     parser.add_argument('--Degradation_type', type=str, default='DownBlur') # 'BSRGAN' or 'DownBlur' or 'DownBlurNoise'
     parser.add_argument('--num_crops', type=int, default=1)
     parser.add_argument('--multiple_gpus', type=str2bool, nargs='?', const=True, default=False)
