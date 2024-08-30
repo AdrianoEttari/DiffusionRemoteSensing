@@ -62,13 +62,17 @@ class ResConvBlock(nn.Module):
         self.time_mlp =  self._make_te(time_emb_dim, out_ch, device=device)
         self.batch_norm1 = nn.BatchNorm2d(out_ch, device=device)
         self.batch_norm2 = nn.BatchNorm2d(out_ch, device=device)
+        # self.group_norm1 = nn.GroupNorm(16, out_ch, device=device)
+        # self.group_norm2 = nn.GroupNorm(16, out_ch, device=device)
         self.shortcut_batch_norm = nn.BatchNorm2d(out_ch, device=device)
+        # self.shortcut_group_norm = nn.GroupNorm(16, out_ch, device=device)
         self.relu = nn.ReLU(inplace=False) # inplace=True MEANS THAT IT WILL MODIFY THE INPUT DIRECTLY, WITHOUT ASSIGNING IT TO A NEW VARIABLE (THIS SAVES SPACE IN MEMORY, BUT IT MODIFIES THE INPUT)
         self.conv1 = nn.Sequential(
                                   nn.Conv2d(in_ch, out_ch,
                                             kernel_size=3, stride=1,
                                             padding='same', bias=True,
                                             device=device),
+                                            # self.group_norm1,
                                   self.batch_norm1,
                                   self.relu)
         self.conv_upsampled_lr_img = nn.Conv2d(in_ch, out_ch, 3, padding=1)
@@ -77,12 +81,14 @@ class ResConvBlock(nn.Module):
                                             kernel_size=3, stride=1,
                                             padding='same', bias=True,
                                             device=device),
+                                            # self.group_norm2)
                                   self.batch_norm2)
         self.shortcut_conv = nn.Sequential(
                                     nn.Conv2d(in_ch, out_ch, 
                                         kernel_size=1, stride=1,
                                         padding='same', bias=True,
                                         device=device),
+                                        # self.shortcut_group_norm)
                                     self.shortcut_batch_norm)
 
     def _make_te(self, dim_in, dim_out, device):
@@ -125,6 +131,7 @@ class UpConvBlock(nn.Module):
         super().__init__()
         self.time_mlp = self._make_te(time_emb_dim, out_ch, device=device)
         self.batch_norm = nn.BatchNorm2d(out_ch, device=device)
+        # self.group_norm = nn.GroupNorm(16, out_ch, device=device)
         self.relu = nn.ReLU(inplace=False)
         self.conv = nn.Conv2d(in_ch, out_ch, kernel_size=3, stride=1, padding='same', bias=True, device=device)
         self.transform = nn.ConvTranspose2d(out_ch, out_ch, kernel_size=3, stride=2, padding=1, bias=True, output_padding=1, device=device)
@@ -148,6 +155,7 @@ class UpConvBlock(nn.Module):
         x = x + time_emb
         # SECOND CONV
         x = self.relu(self.batch_norm(self.conv(x)))
+        # x = self.relu(self.group_norm(self.conv(x)))
         output = self.transform(x)
         return output
 
@@ -161,12 +169,14 @@ class gating_signal(nn.Module):
         super(gating_signal, self).__init__()
         self.conv = nn.Conv2d(in_dim, out_dim, kernel_size=1, stride=1, padding='same', device=device)
         self.batch_norm = nn.BatchNorm2d(out_dim, device=device)
+        # self.group_norm = nn.GroupNorm(16, out_dim, device=device)
         self.relu = nn.ReLU(inplace=False)
         self.device = device
 
     def forward(self, x):
         x = self.conv(x)
         x = self.batch_norm(x)
+        # x = self.group_norm(x)
         return self.relu(x)  
     
 #########################################################################################################
