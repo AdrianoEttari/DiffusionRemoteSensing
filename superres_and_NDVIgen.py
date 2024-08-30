@@ -173,7 +173,7 @@ def plot_SAR_NDVI(SAR_img, NDVI_img, NDVI_pred_img, save_path=None):
 
     
 if __name__ == '__main__':
-        #### SUPER RESOLUTION EXAMPLE ####
+       #### SUPER RESOLUTION EXAMPLE #####
         # device = 'mps'
         # img_path = os.path.join('assets','Other','up42_sample_lr.png')
         # to_tensor = transforms.ToTensor()
@@ -183,24 +183,23 @@ if __name__ == '__main__':
         # file_name = os.path.basename(img_path)
         # save_path = os.path.join('assets','Other',file_name.replace('lr', 'sr'))
         # plot_lr_sr(lr_img, superres_img, histogram=False, save_path=save_path)
-
-
+        
         #### SUPER RESOLUTION EXAMPLE ####
-        device = 'mps'
-        img_path = os.path.join('celebA_10k','test_original','000114.jpg')
-        img = Image.open(img_path)
-        img = img.resize((192,192))
-        downsample = transforms.Resize((img.size[0] // 4, img.size[1] // 4),
-                                       interpolation=transforms.InterpolationMode.BICUBIC)
-        img = downsample(img)
+        # device = 'mps'
+        # img_path = os.path.join('celebA_10k','test_original','000114.jpg')
+        # img = Image.open(img_path)
+        # img = img.resize((192,192))
+        # downsample = transforms.Resize((img.size[0] // 4, img.size[1] // 4),
+        #                                interpolation=transforms.InterpolationMode.BICUBIC)
+        # img = downsample(img)
 
-        to_tensor = transforms.ToTensor()
-        lr_img = to_tensor(img).to(device)
+        # to_tensor = transforms.ToTensor()
+        # lr_img = to_tensor(img).to(device)
 
-        model_name = 'Residual_VisionMultiHeadAttention_UNet_superres_magnification4_LRimgsize48_CelebA100k_downblur_4'
-        superres_img = super_resolver(lr_img, device, model_name,model='Residual Vision Multihead Attention Unet')
-        file_name = os.path.basename(img_path)
-        plot_lr_sr(lr_img, superres_img, histogram=False)
+        # model_name = 'Residual_VisionMultiHeadAttention_UNet_superres_magnification4_LRimgsize48_CelebA100k_downblur_4'
+        # superres_img = super_resolver(lr_img, device, model_name,model='Residual Vision Multihead Attention Unet')
+        # file_name = os.path.basename(img_path)
+        # plot_lr_sr(lr_img, superres_img, histogram=False)
 
         #### SAR TO NDVI EXAMPLE ####
         # device = 'mps'
@@ -214,5 +213,3 @@ if __name__ == '__main__':
         # destination_path = 'models_run/Residual_Attention_UNet_EMA_imgsize128_SAR_TO_NDVI/results'
         # save_path = os.path.join(destination_path, f'{list_of_files[0].replace(".pt", ".png")}')
         # plot_SAR_NDVI(SAR_img, NDVI_img, NDVI_pred_img, save_path=save_path)
-
-

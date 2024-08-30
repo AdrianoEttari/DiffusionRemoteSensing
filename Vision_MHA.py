@@ -26,7 +26,7 @@ class ImageEncoding(nn.Module):
         self.flatten = nn.Flatten(start_dim=2, end_dim=3) # (batch_size, embedding_dim, num_patches_y, num_patches_x) -> (batch_size, embedding_dim, num_patches)
     
     def forward(self, x):
-        if x.shape[-1] != self.image_size:
+        if x.shape[-1] != self.image_size: # The image k in the Vision_MHA class is half the size of the image q
             try:
                 x = F.interpolate(x, size=(self.image_size, self.image_size), mode='bicubic')
             except:
@@ -87,28 +87,31 @@ class MultiheadAttention(nn.Module):
 
     def attention(self, q, k, v, mask=None):
         attention_scores = torch.matmul(q, k.transpose(-2, -1)) / torch.sqrt(torch.tensor(self.head_dim, dtype=torch.float32))
+        # Remember that we divide the dot product between q and k by the square root of the head_dim that is also the dimension
+        # of the query and key vectors. This is done to avoid the vanishing gradient problem.
         if mask is not None:
             attention_scores = attention_scores.masked_fill(mask == 0, -1e9)
+
         attention = torch.softmax(attention_scores, dim=-1)
 
         x = torch.matmul(attention, v)
         return x
 
     def forward(self, q,k,v ,mask= None):
-        # q,k,v = (batch_size, num_patches+1, embedding_dim)
+        # q,k,v = (batch_size, num_patches, embedding_dim)
 
         q1 = self.w_q(q)
         k1 = self.w_k(k)
         v1 = self.w_v(v)
 
-        # -view->((batch_size, num_patches+1, head, head_dim)  -transpose-> (batch_size, head, num_patches+1, head_dim)
+        # -view->((batch_size, num_patches, head, head_dim)  -transpose-> (batch_size, head, num_patches, head_dim)
         q1 = q1.view(q1.shape[0], q1.shape[1], self.head, self.head_dim).transpose(1,2) 
         k1 = k1.view(k1.shape[0], k1.shape[1], self.head, self.head_dim).transpose(1,2)
         v1 = v1.view(v1.shape[0], v1.shape[1], self.head, self.head_dim).transpose(1,2)
 
-        x = self.attention(q1, k1, v1, mask=mask) # (batch_size, head, num_patches+1, head_dim)
-        x = x.transpose(1,2) # (batch_size, num_patches+1, head, head_dim)
-        x = x.flatten(start_dim=2, end_dim=3) # (batch_size, num_patches+1, embedding_dim)
+        x = self.attention(q1, k1, v1, mask=mask) # (batch_size, head, num_patches, head_dim)
+        x = x.transpose(1,2) # (batch_size, num_patches, head, head_dim)
+        x = x.flatten(start_dim=2, end_dim=3) # (batch_size, num_patches, embedding_dim)
 
         x = self.w_o(x)
         return x
