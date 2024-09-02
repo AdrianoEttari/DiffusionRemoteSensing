@@ -1,5 +1,4 @@
 import torch.nn as nn
-import math
 import torch
 import torch.nn.functional as F
 from Vision_MHA import Vision_MHA
@@ -52,28 +51,90 @@ class EMA:
         ema_model.load_state_dict(model.state_dict()) # we set the weights of ema_model
         # to the ones of model.
   
+class AttentionBlock(nn.Module):
+    def __init__(self, f_g, f_x, f_int, normalization, device):
+        '''
+        AttentionBlock: Applies an attention mechanism to the input data.
+        
+        Args:
+            f_g (int): Number of channels in the 'g' input (image on the up path).
+            f_x (int): Number of channels in the 'x' input (residual image).
+            f_int (int): Number of channels in the intermediate layer.
+            normalization (str): Type of normalization to be used.
+            device: Device where the operations should be performed.
+        '''
+        super().__init__()
+        self.w_g = nn.Sequential(
+            nn.Conv2d(f_g, f_int, kernel_size=1, stride=1, padding=0, bias=True).to(device),
+        ) # Computes a 1x1 convolution of the 'g' input to reduce its channel dimension to f_int.
+        
+        self.w_x = nn.Sequential(
+            nn.Conv2d(f_x, f_int, kernel_size=2, stride=2, padding=0, bias=True).to(device),
+        ) # Computes a 1x1 convolution of the 'x' input to reduce its channel dimension to f_int.
+
+        self.psi = nn.Sequential(
+            nn.Conv2d(f_int, 1, kernel_size=1, stride=1, padding=0, bias=True).to(device),
+            nn.Sigmoid()
+        ) # Computes a 1x1 convolution of the element-wise sum of the processed 'g' and 'x' inputs, followed by a sigmoid activation.
+        
+        self.relu = nn.ReLU(inplace=False)
+
+        if normalization.lower() == 'group':
+            self.normalization = nn.GroupNorm(4, f_x).to(device)
+        elif normalization.lower() == 'batch':
+            self.normalization = nn.BatchNorm2d(f_x).to(device)
+
+        self.result = nn.Sequential(
+            nn.Conv2d(f_x, f_x, kernel_size=1, stride=1, padding=0, bias=True).to(device),
+            self.normalization,
+        )
+                                                                        
+    def forward(self, x, g):
+        '''
+        Forward pass for the AttentionBlock.
+
+        Args:
+            x (torch.Tensor): The 'x' input (residual image).
+            g (torch.Tensor): The 'g' input (image on the up path).
+
+        Returns:
+            torch.Tensor: The output of the attention mechanism applied to the input data.
+        '''
+        # Assuming g: 1,128,28,28 # x: 1,128,56,56
+        g1 = self.w_g(g) # 1,128,28,28
+        x1 = self.w_x(x) # 1,128,28,28
+        psi = self.relu(g1 + x1) # 1,128,28,28
+        psi = self.psi(psi) # 1,1,28,28
+        upsample_psi = F.interpolate(psi, scale_factor=2, mode='nearest') # 1,1,56,56
+        upsample_psi = upsample_psi.repeat_interleave(repeats=x.shape[1], dim=1) # 1,128,56,56 (repeats the 1 channel to 128)
+        result = self.result(upsample_psi * x) # 1,128,56,56
+        return result
+    
 class ResConvBlock(nn.Module):
     '''
     This class defines a residual convolutional block. It does not contain the layer for the actual
     downsampling: it doesn't contain a layer which shrinks the spatial dimensions of the input data.
     '''
-    def __init__(self, in_ch, out_ch, time_emb_dim, device):
+    def __init__(self, in_ch, out_ch, time_emb_dim, normalization, device):
         super().__init__()
         self.time_mlp =  self._make_te(time_emb_dim, out_ch, device=device)
-        self.batch_norm1 = nn.BatchNorm2d(out_ch, device=device)
-        self.batch_norm2 = nn.BatchNorm2d(out_ch, device=device)
-        # self.group_norm1 = nn.GroupNorm(16, out_ch, device=device)
-        # self.group_norm2 = nn.GroupNorm(16, out_ch, device=device)
-        self.shortcut_batch_norm = nn.BatchNorm2d(out_ch, device=device)
-        # self.shortcut_group_norm = nn.GroupNorm(16, out_ch, device=device)
+
+        if normalization.lower() == 'group':
+            self.normalization1 = nn.GroupNorm(4, out_ch, device=device)
+            self.normalization2 = nn.GroupNorm(4, out_ch, device=device)
+            self.shortcut_norm = nn.GroupNorm(4, out_ch, device=device)
+        elif normalization.lower() == 'batch':
+            self.normalization1 = nn.BatchNorm2d(out_ch, device=device)
+            self.normalization2 = nn.BatchNorm2d(out_ch, device=device)
+            self.shortcut_norm = nn.BatchNorm2d(out_ch, device=device)
+
         self.relu = nn.ReLU(inplace=False) # inplace=True MEANS THAT IT WILL MODIFY THE INPUT DIRECTLY, WITHOUT ASSIGNING IT TO A NEW VARIABLE (THIS SAVES SPACE IN MEMORY, BUT IT MODIFIES THE INPUT)
         self.conv1 = nn.Sequential(
                                   nn.Conv2d(in_ch, out_ch,
                                             kernel_size=3, stride=1,
                                             padding='same', bias=True,
                                             device=device),
-                                            # self.group_norm1,
-                                  self.batch_norm1,
+                                  self.normalization1,
                                   self.relu)
         self.conv_upsampled_lr_img = nn.Conv2d(in_ch, out_ch, 3, padding=1)
         self.conv2 = nn.Sequential(
@@ -81,15 +142,13 @@ class ResConvBlock(nn.Module):
                                             kernel_size=3, stride=1,
                                             padding='same', bias=True,
                                             device=device),
-                                            # self.group_norm2)
-                                  self.batch_norm2)
+                                  self.normalization2)
         self.shortcut_conv = nn.Sequential(
                                     nn.Conv2d(in_ch, out_ch, 
                                         kernel_size=1, stride=1,
                                         padding='same', bias=True,
                                         device=device),
-                                        # self.shortcut_group_norm)
-                                    self.shortcut_batch_norm)
+                                        self.shortcut_norm)
 
     def _make_te(self, dim_in, dim_out, device):
         '''
@@ -127,11 +186,15 @@ class UpConvBlock(nn.Module):
     This class performs a convolution and a transposed convolution on the input data. The latter
     increases the spatial dimensions of the data by a factor of 2.
     '''
-    def __init__(self, in_ch, out_ch, time_emb_dim, device):
+    def __init__(self, in_ch, out_ch, time_emb_dim, normalization, device):
         super().__init__()
         self.time_mlp = self._make_te(time_emb_dim, out_ch, device=device)
-        self.batch_norm = nn.BatchNorm2d(out_ch, device=device)
-        # self.group_norm = nn.GroupNorm(16, out_ch, device=device)
+
+        if normalization.lower() == 'group':
+            self.normalization = nn.GroupNorm(4, out_ch, device=device)
+        elif normalization.lower() == 'batch':
+            self.normalization = nn.BatchNorm2d(out_ch, device=device)
+
         self.relu = nn.ReLU(inplace=False)
         self.conv = nn.Conv2d(in_ch, out_ch, kernel_size=3, stride=1, padding='same', bias=True, device=device)
         self.transform = nn.ConvTranspose2d(out_ch, out_ch, kernel_size=3, stride=2, padding=1, bias=True, output_padding=1, device=device)
@@ -154,7 +217,7 @@ class UpConvBlock(nn.Module):
         # ADD TIME CHANNEL
         x = x + time_emb
         # SECOND CONV
-        x = self.relu(self.batch_norm(self.conv(x)))
+        x = self.relu(self.normalization(self.conv(x)))
         # x = self.relu(self.group_norm(self.conv(x)))
         output = self.transform(x)
         return output
@@ -165,18 +228,21 @@ class gating_signal(nn.Module):
     It just applies a 1x1 convolution followed by a batch normalization and a ReLU activation that 
     moves the depth dimension of the input tensor from in_dim to out_dim.
     '''
-    def __init__(self, in_dim, out_dim, device):
+    def __init__(self, in_dim, out_dim, normalization, device):
         super(gating_signal, self).__init__()
         self.conv = nn.Conv2d(in_dim, out_dim, kernel_size=1, stride=1, padding='same', device=device)
-        self.batch_norm = nn.BatchNorm2d(out_dim, device=device)
-        # self.group_norm = nn.GroupNorm(16, out_dim, device=device)
+
+        if normalization.lower() == 'group':
+            self.normalization = nn.GroupNorm(4, out_dim, device=device)
+        elif normalization.lower() == 'batch':
+            self.normalization = nn.BatchNorm2d(out_dim, device=device)
+
         self.relu = nn.ReLU(inplace=False)
         self.device = device
 
     def forward(self, x):
         x = self.conv(x)
-        x = self.batch_norm(x)
-        # x = self.group_norm(x)
+        x = self.normalization(x)
         return self.relu(x)  
     
 #########################################################################################################
@@ -217,9 +283,8 @@ class RRDB(nn.Module):
 #########################################################################################################
 ################################################ Models #################################################
 #########################################################################################################
-
-class Residual_Attention_UNet_superres_VMHA(nn.Module):
-    def __init__(self, image_channels=3, out_dim=3, image_size=None, device=None):
+class Residual_Attention_UNet_superres(nn.Module):
+    def __init__(self, image_channels=3, out_dim=3, normalization='Batch', device=None):
         super().__init__()
         self.image_channels = image_channels
         self.down_channels = (16,32,64,128,256) # Note that there are 4 downsampling layers and 4 upsampling layers.
@@ -227,11 +292,8 @@ class Residual_Attention_UNet_superres_VMHA(nn.Module):
         # has a Conv2D(16,32), the second layer has a Conv2D(32,64) and the third layer has a Conv2D(64,128)...
         self.up_channels = (256,128,64,32,16) # Note that the last channel is not used in the upsampling (it goes from up_channels[-2] to out_dim)
         self.out_dim = out_dim 
-
-        self.image_size = image_size
-        self.image_sizes = [self.image_size//(2**i) for i in range(len(self.up_channels)-2)][::-1]
-
         self.time_emb_dim = 100 # Refers to the number of dimensions or features used to represent time.
+        self.normalization = normalization
         self.device = device
         # It's important to note that the dimensionality of time embeddings should be chosen carefully,
         # considering the trade-off between model complexity and the amount of available data.
@@ -250,6 +312,7 @@ class Residual_Attention_UNet_superres_VMHA(nn.Module):
             ResConvBlock(in_ch=self.down_channels[i],
                       out_ch=self.down_channels[i+1],
                       time_emb_dim=self.time_emb_dim,
+                      normalization=self.normalization,
                       device=self.device) \
             for i in range(len(self.down_channels)-2)])
         
@@ -261,11 +324,134 @@ class Residual_Attention_UNet_superres_VMHA(nn.Module):
         self.bottle_neck = ResConvBlock(in_ch=self.down_channels[-2],
                                         out_ch=self.down_channels[-1],
                                         time_emb_dim=self.time_emb_dim,
+                                        normalization=self.normalization,
                                         device=self.device)
         
         # UPSAMPLE
         self.gating_signals = nn.ModuleList([
-            gating_signal(self.up_channels[i], self.up_channels[i+1], self.device) \
+            gating_signal(self.up_channels[i], self.up_channels[i+1], self.normalization, self.device) \
+            for i in range(len(self.up_channels)-2)])
+        
+        self.attention_blocks = nn.ModuleList([
+            AttentionBlock(self.up_channels[i+1], self.up_channels[i+1], self.up_channels[i+1], self.normalization, self.device) \
+            for i in range(len(self.up_channels)-2)])
+        
+        self.ups = nn.ModuleList([
+            UpConvBlock(in_ch=self.up_channels[i], out_ch=self.up_channels[i], time_emb_dim=self.time_emb_dim, normalization=self.normalization, device=self.device) \
+            for i in range(len(self.up_channels)-2)])
+        
+        self.up_convs = nn.ModuleList([
+            nn.Conv2d(int(self.up_channels[i]*3/2), self.up_channels[i+1], kernel_size=3, stride=1, padding=1, bias=True).to(self.device) \
+            for i in range(len(self.up_channels)-2)])
+
+        # OUTPUT
+        self.output = nn.Conv2d(self.up_channels[-2], self.out_dim, 1)
+
+    # TIME EMBEDDING
+    def pos_encoding(self, t, channels, device):
+        inv_freq = 1.0 / (
+            10000**(torch.arange(0, channels, 2, device= device).float() / channels)
+        )
+        pos_enc_a = torch.sin(t.repeat(1, channels // 2) * inv_freq)
+        pos_enc_b = torch.cos(t.repeat(1, channels // 2) * inv_freq)
+        pos_enc = torch.cat([pos_enc_a, pos_enc_b], dim=-1)
+        return pos_enc
+    
+    def forward(self, x, timestep, lr_img, magnification_factor):
+        t = timestep.unsqueeze(-1).type(torch.float)
+        t = self.pos_encoding(t, self.time_emb_dim, device=self.device)
+
+        # INITIAL CONVOLUTION
+        x = self.conv0(x)
+
+        # LR ENCODER
+        lr_img = self.LR_encoder(lr_img)
+ 
+        # UPSAMPLE LR IMAGE
+        try:
+            upsampled_lr_img = F.interpolate(lr_img, scale_factor=magnification_factor, mode='bicubic')
+        except:
+            upsampled_lr_img = F.interpolate(lr_img.to('cpu'), scale_factor=magnification_factor, mode='bicubic').to(self.device)
+
+        upsampled_lr_img = self.conv_upsampled_lr_img(upsampled_lr_img)
+        # SUM THE UP SAMPLED LR IMAGE WITH THE INPUT IMAGE
+        x = x + upsampled_lr_img
+        x_skip = x.clone()
+
+        # UNET (DOWNSAMPLE)        
+        residual_inputs = []
+        for i, (conv_block, down) in enumerate(zip(self.conv_blocks, self.downs)):
+            if i == 0:
+                x = conv_block(x, t, x_skip)
+            else:
+                x = conv_block(x, t, None)
+            residual_inputs.append(x)
+            x = down(x)
+        
+        # UNET (BOTTLENECK)
+        x = self.bottle_neck(x, t, None)
+
+        # UNET (UPSAMPLE)
+        for i, (gating_signal, attention_block, up, up_conv) in enumerate(zip(self.gating_signals,self.attention_blocks,self.ups, self.up_convs)):
+            gating = gating_signal(x)
+            attention = attention_block(residual_inputs[-(i+1)], gating)
+            x = up(x, t)
+            x = torch.cat([x, attention], dim=1)
+            x = up_conv(x)
+
+        return self.output(x)
+
+class Residual_VisionMultiheadAttention_UNet_superres(nn.Module):
+    def __init__(self, image_channels=3, out_dim=3, image_size=None, normalization='Batch', device=None):
+        super().__init__()
+        self.image_channels = image_channels
+        self.down_channels = (16,32,64,128,256) # Note that there are 4 downsampling layers and 4 upsampling layers.
+        # To understand why len(self.down_channels)=5, you have to imagine that the first layer 
+        # has a Conv2D(16,32), the second layer has a Conv2D(32,64) and the third layer has a Conv2D(64,128)...
+        self.up_channels = (256,128,64,32,16) # Note that the last channel is not used in the upsampling (it goes from up_channels[-2] to out_dim)
+        self.out_dim = out_dim 
+
+        self.image_size = image_size
+        self.image_sizes = [self.image_size//(2**i) for i in range(len(self.up_channels)-2)][::-1]
+
+        self.time_emb_dim = 100 # Refers to the number of dimensions or features used to represent time.
+        self.normalization = normalization
+        self.device = device
+        # It's important to note that the dimensionality of time embeddings should be chosen carefully,
+        # considering the trade-off between model complexity and the amount of available data.
+
+        # INITIAL PROJECTION
+        self.conv0 = nn.Conv2d(self.image_channels, self.down_channels[0], 3, padding=1) # SINCE THERE IS PADDING 1 AND STRIDE 1,  THE OUTPUT IS THE SAME SIZE OF THE INPUT
+
+        # LR ENCODER
+        self.LR_encoder = RRDB(in_channels=image_channels, out_channels=image_channels, num_blocks=3)
+
+        # UPSAMPLE LR IMAGE
+        self.conv_upsampled_lr_img = nn.Conv2d(self.image_channels, self.down_channels[0], 3, padding=1)
+        
+        # DOWNSAMPLE
+        self.conv_blocks = nn.ModuleList([
+            ResConvBlock(in_ch=self.down_channels[i],
+                      out_ch=self.down_channels[i+1],
+                      time_emb_dim=self.time_emb_dim,
+                      normalization=self.normalization, 
+                      device=self.device) \
+            for i in range(len(self.down_channels)-2)])
+        
+        self.downs = nn.ModuleList([
+            nn.Conv2d(self.down_channels[i+1], self.down_channels[i+1], kernel_size=3, stride=2, padding=1, bias=True, device=device)\
+        for i in range(len(self.down_channels)-2)])
+
+        # BOTTLENECK
+        self.bottle_neck = ResConvBlock(in_ch=self.down_channels[-2],
+                                        out_ch=self.down_channels[-1],
+                                        time_emb_dim=self.time_emb_dim,
+                                        normalization=self.normalization,
+                                        device=self.device)
+        
+        # UPSAMPLE
+        self.gating_signals = nn.ModuleList([
+            gating_signal(self.up_channels[i], self.up_channels[i+1], self.normalization, self.device) \
             for i in range(len(self.up_channels)-2)])
         
         self.vision_mh_attention_blocks = nn.ModuleList([
@@ -273,7 +459,7 @@ class Residual_Attention_UNet_superres_VMHA(nn.Module):
             for i in range(len(self.up_channels)-2)])
         
         self.ups = nn.ModuleList([
-            UpConvBlock(in_ch=self.up_channels[i], out_ch=self.up_channels[i], time_emb_dim=self.time_emb_dim, device=self.device) \
+            UpConvBlock(in_ch=self.up_channels[i], out_ch=self.up_channels[i], time_emb_dim=self.time_emb_dim, normalization=self.normalization, device=self.device) \
             for i in range(len(self.up_channels)-2)])
         
         self.up_convs = nn.ModuleList([
@@ -344,7 +530,7 @@ if __name__=="__main__":
     device='cpu'
     x = torch.randn((1,input_channels,image_size,image_size))
 
-    model = Residual_Attention_UNet_superres_VMHA(input_channels, output_channels, image_size=image_size, device=device).to(device) # The images must be squared
+    model = Residual_VisionMultiheadAttention_UNet_superres(input_channels, output_channels, image_size=image_size, device=device).to(device) # The images must be squared
 
     def print_parameter_count(model):
         total_params = 0
