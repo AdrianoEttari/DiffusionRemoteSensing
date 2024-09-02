@@ -10,8 +10,8 @@ from torch.utils.data import DataLoader
 from utils import get_data_superres, get_data_superres_BSRGAN, video_maker
 import copy
 
-from UNet_model_superres import Residual_Attention_UNet_superres, EMA
-from UNet_model_superres_VMHA import Residual_Attention_UNet_superres_VMHA, EMA
+# from UNet_model_superres import Residual_Attention_UNet_superres, EMA
+from UNet_model_superres_VMHA import Residual_Attention_UNet_superres, Residual_VisionMultiheadAttention_UNet_superres, EMA
 import torch
 import torch.nn as nn
 import torchvision.models as models
@@ -563,6 +563,7 @@ def launch(args):
     num_crops = args.num_crops
     multiple_gpus = args.multiple_gpus
     ema_smoothing = args.ema_smoothing
+    normalization = args.normalization
     Blur_radius = args.Blur_radius
 
     if Blur_radius.lower() != 'random':
@@ -578,6 +579,7 @@ def launch(args):
     else:
         print(f'Not using EMA smoothing')
 
+    print('Using', normalization, 'normalization')
     os.makedirs(snapshot_folder_path, exist_ok=True)
     os.makedirs(os.path.join(os.curdir, 'models_run', model_name, 'results'), exist_ok=True)
     
@@ -643,13 +645,13 @@ def launch(args):
 
     if UNet_type.lower() == 'residual attention unet':
         print('Using Residual Attention UNet')
-        model = Residual_Attention_UNet_superres(input_channels, output_channels, device).to(device)
+        model = Residual_Attention_UNet_superres(input_channels, output_channels, normalization, device).to(device)
     elif UNet_type.lower() == 'residual multihead attention unet':
         print('Using Residual MultiHead Attention UNet')
         # model = Residual_MultiHeadAttention_UNet_superres(input_channels, output_channels, device).to(device)
     elif UNet_type.lower() == 'residual vision multihead attention unet':
         print('Using Residual Vision MultiHead Attention UNet')
-        model = Residual_Attention_UNet_superres_VMHA(input_channels, output_channels, image_size=train_dataset[0][1].shape[-1], device=device).to(device) # The images must be squared
+        model = Residual_VisionMultiheadAttention_UNet_superres(input_channels, output_channels, image_size=train_dataset[0][1].shape[-1], normalization=normalization,device=device).to(device) # The images must be squared
     else:
         raise ValueError('The UNet type must be Residual Attention UNet or Residual MultiHead Attention UNet or Residual Vision MultiHeadAttention UNet superres')
     
@@ -725,6 +727,7 @@ if __name__ == '__main__':
     parser.add_argument('--num_crops', type=int, default=1)
     parser.add_argument('--multiple_gpus', type=str2bool, nargs='?', const=True, default=False)
     parser.add_argument('--ema_smoothing', type=str2bool, nargs='?', const=True, default=False)
+    parser.add_argument('--normalization', type=str, default='Batch') # 'Batch' or 'instance' or 'Group'
     parser.add_argument('--Blur_radius', type=str, default='random')
     args = parser.parse_args()
     args.snapshot_folder_path = os.path.join(os.curdir, 'models_run', args.model_name, 'weights')
