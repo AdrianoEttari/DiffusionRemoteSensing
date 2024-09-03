@@ -168,6 +168,7 @@ models_run/Residual_Attention_UNet_superres_EMA_magnification4_LRimgsize64_ANIME
 models_run/Residual_Attention_UNet_superres_magnification4_LRimgsize50_CelebA50k_downblur
 up42_sentinel2_patches/
 celebA_10k/
+celebA_100k/
 
 # Files
 .DS_Store
