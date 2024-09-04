@@ -12,6 +12,7 @@ import copy
 
 # from UNet_model_superres import Residual_Attention_UNet_superres, EMA
 from UNet_model_superres_VMHA import Residual_Attention_UNet_superres, Residual_VisionMultiheadAttention_UNet_superres, EMA
+from ViT_model import ViTModel
 import torch
 import torch.nn as nn
 import torchvision.models as models
@@ -651,6 +652,9 @@ def launch(args):
     elif UNet_type.lower() == 'residual vision multihead attention unet':
         print('Using Residual Vision MultiHead Attention UNet')
         model = Residual_VisionMultiheadAttention_UNet_superres(input_channels, output_channels, image_size=train_dataset[0][1].shape[-1],device=device).to(device) # The images must be squared
+    elif UNet_type.lower() == 'vision transformer':
+        print('Using Vision Transformer (noUnet)')
+        model = ViTModel(image_channels=input_channels, device=device).to(device)
     else:
         raise ValueError('The UNet type must be Residual Attention UNet or Residual MultiHead Attention UNet or Residual Vision MultiHeadAttention UNet superres')
     
