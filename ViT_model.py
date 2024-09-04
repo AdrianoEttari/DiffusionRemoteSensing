@@ -42,17 +42,16 @@ class ViTModel(nn.Module):
         super(ViTModel, self).__init__()
         self.device = device
         self.image_channels = image_channels
-        self.down_channels = (16,32,64,128,256)
         self.time_emb_dim = 100
-        self.conv0 = nn.Conv2d(self.image_channels, self.down_channels[0], 3, padding=1)
+        self.conv0 = nn.Conv2d(self.image_channels, self.image_channels, 3, padding=1)
         self.vit = timm.create_model(pretrained_model_name, pretrained=True)
         self.LR_encoder = RRDB(in_channels=self.image_channels, out_channels=self.image_channels, num_blocks=3)
-        self.conv_upsampled_lr_img = nn.Conv2d(self.image_channels, self.down_channels[0], 3, padding=1)
+        self.conv_upsampled_lr_img = nn.Conv2d(self.image_channels, self.image_channels, 3, padding=1)
         # Adapt the classifier to return an image of the same shape as input (3, 256, 256)
-        # self.vit.head = nn.Sequential(
-        #     nn.Linear(self.vit.head.in_features, 256 * 256 * 3),
-        #     nn.Unflatten(1, (3, 256, 256))
-        # )
+        self.vit.head = nn.Sequential(
+            nn.Linear(self.vit.head.in_features, 256 * 256 * 3),
+            nn.Unflatten(1, (3, 256, 256))
+        )
         self.relu = nn.ReLU(inplace=False)
         # Add additional layers if needed for more processing
         self.conv = nn.Conv2d(3, 3, kernel_size=3, stride=1, padding=1)
@@ -78,6 +77,7 @@ class ViTModel(nn.Module):
         )
     
     def forward(self,  x, timestep, lr_img, magnification_factor):
+        image_size = x.shape[-1]
         t = timestep.unsqueeze(-1).type(torch.float)
         t = self.pos_encoding(t, self.time_emb_dim, device=self.device)
         t = self.relu(self.time_mlp(t))
@@ -93,12 +93,11 @@ class ViTModel(nn.Module):
         upsampled_lr_img = self.conv_upsampled_lr_img(upsampled_lr_img)
 
         x = self.conv0(x)
-        x = x + upsampled_lr_img
-        
+        x = x + upsampled_lr_img + t
         batch_size = x.size(0)
         x = transforms.Resize((224, 224))(x)
         x = self.vit(x)
-        x = transforms.Resize((256, 256))(x)
+        x = transforms.Resize((image_size, image_size))(x)
         x = self.conv(x)
         return x
 
@@ -121,5 +120,8 @@ if __name__ == '__main__':
     # Check output shape
     print(f"Output shape: {output_tensor.shape}")
 
-    # %%
     print("Num params: ", sum(p.numel() for p in model.parameters()))
+    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    print(f"Trainable parameters: {trainable_params}")
+    non_trainable_params = sum(p.numel() for p in model.parameters() if not p.requires_grad)
+    print(f"Non-trainable parameters: {non_trainable_params}")
