@@ -267,10 +267,10 @@ class Residual_Attention_UNet_superres(nn.Module):
     def __init__(self, image_channels=3, out_dim=3, device=None):
         super().__init__()
         self.image_channels = image_channels
-        self.down_channels = (16,32,64,128,256) # Note that there are 4 downsampling layers and 4 upsampling layers.
+        self.down_channels = (16,32,64,128) # Note that there are 4 downsampling layers and 4 upsampling layers.
         # To understand why len(self.down_channels)=5, you have to imagine that the first layer 
         # has a Conv2D(16,32), the second layer has a Conv2D(32,64) and the third layer has a Conv2D(64,128)...
-        self.up_channels = (256,128,64,32,16) # Note that the last channel is not used in the upsampling (it goes from up_channels[-2] to out_dim)
+        self.up_channels = (128,64,32,16) # Note that the last channel is not used in the upsampling (it goes from up_channels[-2] to out_dim)
         self.out_dim = out_dim 
         self.time_emb_dim = 100 # Refers to the number of dimensions or features used to represent time.
         self.device = device
@@ -368,7 +368,6 @@ class Residual_Attention_UNet_superres(nn.Module):
         
         # UNET (BOTTLENECK)
         x = self.bottle_neck(x, t, None)
-
         # UNET (UPSAMPLE)
         for i, (gating_signal, attention_block, up, up_conv) in enumerate(zip(self.gating_signals,self.attention_blocks,self.ups, self.up_convs)):
             gating = gating_signal(x)
@@ -498,14 +497,232 @@ class Residual_VisionMultiheadAttention_UNet_superres(nn.Module):
 
         return self.output(x)
     
+
+
+class DiffiT_Attention(nn.Module):
+    def __init__(self, f_g, f_x, f_int, device):
+        '''
+        AttentionBlock: Applies an attention mechanism to the input data.
+        
+        Args:
+            f_g (int): Number of channels in the 'g' input (image on the up path).
+            f_x (int): Number of channels in the 'x' input (residual image).
+            f_int (int): Number of channels in the intermediate layer.
+            device: Device where the operations should be performed.
+        '''
+        super().__init__()
+        self.w_g = nn.Sequential(
+            nn.Conv2d(f_g, f_int, kernel_size=1, stride=1, padding=0, bias=True).to(device),
+        ) # Computes a 1x1 convolution of the 'g' input to reduce its channel dimension to f_int.
+        
+        self.w_x = nn.Sequential(
+            nn.Conv2d(f_x, f_int, kernel_size=1, stride=1, padding=0, bias=True).to(device),
+        ) # Computes a 1x1 convolution of the 'x' input to reduce its channel dimension to f_int.
+
+        self.psi = nn.Sequential(
+            nn.Conv2d(f_int, 1, kernel_size=1, stride=1, padding=0, bias=True).to(device),
+            nn.Sigmoid()
+        ) # Computes a 1x1 convolution of the element-wise sum of the processed 'g' and 'x' inputs, followed by a sigmoid activation.
+        
+        self.relu = nn.ReLU(inplace=False)
+
+        self.result = nn.Sequential(
+            nn.Conv2d(f_x, f_x, kernel_size=1, stride=1, padding=0, bias=True).to(device),
+            nn.BatchNorm2d(f_x).to(device),
+        )
+                                                                        
+    def forward(self, x, g):
+        '''
+        Forward pass for the AttentionBlock.
+
+        Args:
+            x (torch.Tensor): The 'x' input (residual image).
+            g (torch.Tensor): The 'g' input (image on the up path).
+
+        Returns:
+            torch.Tensor: The output of the attention mechanism applied to the input data.
+        '''
+        g1 = self.w_g(g)
+        x1 = self.w_x(x)
+        psi = self.relu(g1 + x1)
+        psi = self.psi(psi)
+        psi = psi.repeat_interleave(repeats=x.shape[1], dim=1)
+        result = self.result(psi * x)
+        return result
+
+class DiffiT_AttentionBlock(nn.Module):
+    def __init__(self, num_channels, device=None):
+        super().__init__()
+        self.device = device
+        self.batch_norm = nn.BatchNorm2d(num_features=num_channels)
+        self.attention_block = DiffiT_Attention(num_channels, num_channels, num_channels, device)
+        self.conv = nn.Conv2d(num_channels, num_channels, kernel_size=3, stride=1, padding=1)
+
+    def forward(self, x, t, lr_img):
+        x_skip1 = x.clone()
+        x = self.batch_norm(x)
+        if lr_img is not None:
+            embedding_t_lr_img = t + lr_img
+        else:
+            embedding_t_lr_img = t
+
+        x = self.attention_block(x, embedding_t_lr_img)
+        x = x + x_skip1
+
+        x_skip2 = x.clone()
+        x = self.batch_norm(x)
+        x = self.conv(x)
+        x = x + x_skip2
+        return x
+
+class DiffiT_ResBlock(nn.Module):
+    def __init__(self, input_channels, out_channels, time_emb_dim, device=None):
+        super().__init__()
+        self.swish = nn.SiLU(inplace=True)
+        self.input_channels = input_channels
+        self.out_channels = out_channels
+        self.conv = nn.Conv2d(input_channels, out_channels, kernel_size=3, stride=1, padding=1)
+        self.conv_skip = nn.Conv2d(input_channels, out_channels, kernel_size=1, stride=1, padding=0)
+        self.batch_norm = nn.BatchNorm2d(num_features=input_channels)
+        self.AttentionBlock = DiffiT_AttentionBlock(out_channels, device)
+        self.device = device
+        self.time_mlp = self._make_te(time_emb_dim, out_channels, device=device)
+        self.relu = nn.ReLU(inplace=True)
+
+    def _make_te(self, dim_in, dim_out, device):
+        '''
+        This function creates a time embedding layer.
+        '''
+        return torch.nn.Sequential(
+            torch.nn.Linear(dim_in, dim_out, device=device),
+            torch.nn.SiLU(),
+            torch.nn.Linear(dim_out, dim_out, device=device)
+        )
+    
+    def forward(self, x, t, lr_img):
+        time_emb = self.relu(self.time_mlp(t))
+        time_emb = time_emb[(..., ) + (None, ) * 2]
+
+        x_skip = x.clone()
+        if x_skip.shape[1] != self.out_channels:
+            x_skip = self.conv_skip((x_skip))
+
+        x = self.swish(self.conv(self.batch_norm(x)))
+
+        x = self.AttentionBlock(x, time_emb, lr_img)
+
+        return x + x_skip
+
+class Residual_DiffiT_UNet_superres(nn.Module):
+    def __init__(self, image_channels=3, out_dim=3, device=None):
+        super().__init__()
+        self.image_channels = image_channels
+        self.down_channels = (128,256) 
+        self.out_dim = out_dim 
+        self.time_emb_dim = 100 # Refers to the number of dimensions or features used to represent time.
+        self.device = device
+        # It's important to note that the dimensionality of time embeddings should be chosen carefully,
+        # considering the trade-off between model complexity and the amount of available data.
+
+        self.conv0 = nn.Conv2d(self.image_channels, self.down_channels[0], 3, padding=1) # SINCE THERE IS PADDING 1 AND STRIDE 1,  THE OUTPUT IS THE SAME SIZE OF THE INPUT
+
+        self.LR_encoder = RRDB(in_channels=image_channels, out_channels=image_channels, num_blocks=3)
+        self.conv_upsampled_lr_img = nn.Conv2d(self.image_channels, self.down_channels[0], 3, padding=1)
+        
+        self.res_block1 = DiffiT_ResBlock(input_channels=self.down_channels[0], out_channels=self.down_channels[0], time_emb_dim=self.time_emb_dim, device=device)
+        self.down1 = nn.Conv2d(self.down_channels[0], self.down_channels[0], kernel_size=3, stride=2, padding=1, bias=True, device=device)
+
+        self.res_block2 = DiffiT_ResBlock(input_channels=self.down_channels[0], out_channels=self.down_channels[1],time_emb_dim=self.time_emb_dim, device=device)
+        self.down2 = nn.Conv2d(self.down_channels[1], self.down_channels[1], kernel_size=3, stride=2, padding=1, bias=True, device=device)
+        
+        self.res_block3 = DiffiT_ResBlock(input_channels=self.down_channels[1], out_channels=self.down_channels[1],time_emb_dim=self.time_emb_dim, device=device)
+        self.down3 = nn.Conv2d(self.down_channels[1], self.down_channels[1], kernel_size=3, stride=2, padding=1, bias=True, device=device)
+
+        self.bottle_neck = DiffiT_ResBlock(input_channels=self.down_channels[1], out_channels=self.down_channels[1], time_emb_dim=self.time_emb_dim, device=device)
+
+        self.batch_norm_up1 = nn.BatchNorm2d(self.down_channels[1], device=device)
+        self.up1 = nn.ConvTranspose2d(self.down_channels[1], self.down_channels[1], kernel_size=3, stride=2, padding=1, output_padding=1, bias=True, device=device)
+        self.res_block4 = DiffiT_ResBlock(input_channels=self.down_channels[1], out_channels=self.down_channels[1], time_emb_dim=self.time_emb_dim, device=device)
+
+        self.batch_norm_up2 = nn.BatchNorm2d(self.down_channels[1], device=device)
+        self.up2 = nn.ConvTranspose2d(self.down_channels[1], self.down_channels[1], kernel_size=3, stride=2, padding=1, output_padding=1, bias=True, device=device)
+        self.res_block5 = DiffiT_ResBlock(input_channels=self.down_channels[1], out_channels=self.down_channels[0], time_emb_dim=self.time_emb_dim, device=device)
+
+        self.batch_norm_up3 = nn.BatchNorm2d(self.down_channels[0], device=device)
+        self.up3 = nn.ConvTranspose2d(self.down_channels[0], self.down_channels[0], kernel_size=3, stride=2, padding=1, output_padding=1, bias=True, device=device)
+        self.res_block6 = DiffiT_ResBlock(input_channels=self.down_channels[0], out_channels=self.down_channels[0], time_emb_dim=self.time_emb_dim, device=device)
+
+        self.output = nn.Conv2d(self.down_channels[0], self.out_dim, 1)
+
+    def pos_encoding(self, t, channels, device):
+        inv_freq = 1.0 / (
+            10000**(torch.arange(0, channels, 2, device= device).float() / channels)
+        )
+        pos_enc_a = torch.sin(t.repeat(1, channels // 2) * inv_freq)
+        pos_enc_b = torch.cos(t.repeat(1, channels // 2) * inv_freq)
+        pos_enc = torch.cat([pos_enc_a, pos_enc_b], dim=-1)
+        return pos_enc
+    
+    def bicubic_interpolation(self, lr_img, magnification_factor, device):
+        try:
+            upsampled_lr_img = F.interpolate(lr_img, scale_factor=magnification_factor, mode='bicubic')
+        except:
+            upsampled_lr_img = F.interpolate(lr_img.to('cpu'), scale_factor=magnification_factor, mode='bicubic').to(device)
+
+        return upsampled_lr_img
+    
+    def forward(self, x, timestep, lr_img, magnification_factor):
+        t = timestep.unsqueeze(-1).type(torch.float)
+        t = self.pos_encoding(t, self.time_emb_dim, device=self.device)
+
+        x = self.conv0(x)
+
+        lr_img = self.LR_encoder(lr_img)
+        upsampled_lr_img = self.bicubic_interpolation(lr_img, magnification_factor, self.device)
+        upsampled_lr_img = self.conv_upsampled_lr_img(upsampled_lr_img)
+
+        # UNET (DOWNSAMPLE)        
+        residual_inputs = []
+        x1 = self.res_block1(x, t, upsampled_lr_img)
+        x_down1 = self.down1(x1)
+        residual_inputs.append(x_down1)
+
+        x2 = self.res_block2(x_down1, t, None)
+        x_down2 = self.down2(x2)
+        residual_inputs.append(x_down2)
+
+        x3 = self.res_block3(x_down2, t, None)
+        x_down3 = self.down3(x3)
+        residual_inputs.append(x_down3)
+
+        x4 = self.bottle_neck(x_down3, t, None)
+        # UNET (UPSAMPLE)
+
+        x5_up = self.up1(self.batch_norm_up1(x4+residual_inputs[-1]))
+        x5 = self.res_block4(x5_up, t, None)
+
+        x6_up = self.up2(self.batch_norm_up2(x5+residual_inputs[-2]))
+        x6 = self.res_block5(x6_up, t, None)
+
+        x7_up = self.up3(self.batch_norm_up3(x6+residual_inputs[-3]))
+        x7 = self.res_block6(x7_up, t, None)
+
+        return self.output(x7)
+        
+    
 if __name__=="__main__":
     input_channels=3
     output_channels=3
-    image_size=224
-    device='cpu'
-    x = torch.randn((1,input_channels,image_size,image_size))
+    image_size=64
+    device='mps'
+    noise_steps = 1500
+    batch_size = 5
+    x = torch.randn((batch_size,input_channels,image_size,image_size)).to(device)
+    timestep = torch.randint(low=1, high=noise_steps, size=(batch_size,)).to(device)
+    magnification_factor = 2
+    lr_img = torch.randn((batch_size,input_channels,image_size//magnification_factor,image_size//magnification_factor)).to(device)
 
-    model = Residual_VisionMultiheadAttention_UNet_superres(input_channels, output_channels, image_size=image_size, device=device).to(device) # The images must be squared
+    model = Residual_DiffiT_UNet_superres(input_channels, output_channels, device=device).to(device) # The images must be squared
 
     def print_parameter_count(model):
         total_params = 0
@@ -524,7 +741,9 @@ if __name__=="__main__":
         print("=" * 50)
         print(f"Total Parameters: {total_params}, Trainable Parameters: {trainable_params}")
 
-    print_parameter_count(model)
+    # print_parameter_count(model)
+    
+    model(x,timestep, lr_img, magnification_factor)
 
 
 

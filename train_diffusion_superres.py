@@ -11,7 +11,7 @@ from utils import get_data_superres, get_data_superres_BSRGAN, video_maker
 import copy
 
 # from UNet_model_superres import Residual_Attention_UNet_superres, EMA
-from UNet_model_superres_VMHA import Residual_Attention_UNet_superres, Residual_VisionMultiheadAttention_UNet_superres, EMA
+from UNet_model_superres_VMHA import Residual_Attention_UNet_superres, Residual_VisionMultiheadAttention_UNet_superres, Residual_DiffiT_UNet_superres, EMA
 from ViT_model import ViTModel
 import torch
 import torch.nn as nn
@@ -655,8 +655,11 @@ def launch(args):
     elif UNet_type.lower() == 'vision transformer':
         print('Using Vision Transformer (noUnet)')
         model = ViTModel(image_channels=input_channels, device=device).to(device)
+    elif UNet_type.lower() == 'diffit unet':
+        print('Using Diffit UNet')
+        model = Residual_DiffiT_UNet_superres(input_channels, output_channels, device).to(device)
     else:
-        raise ValueError('The UNet type must be Residual Attention UNet or Residual MultiHead Attention UNet or Residual Vision MultiHeadAttention UNet superres')
+        raise ValueError('The UNet type must be Residual Attention UNet or Residual MultiHead Attention UNet or Residual Vision MultiHeadAttention UNet superres or Diffit UNet')
     
     # for name, param in model.named_parameters():
     #     print(f"Layer: {name} | Size: {param.size()} | Number of Parameters: {param.numel()}")
