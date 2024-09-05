@@ -11,6 +11,7 @@ from scipy.linalg import orth
 from degradation_from_BSRGAN import degradation_bsrgan_plus, single2uint, imread_uint, soft_degradation_bsrgan
 import imageio
 import cv2
+import torch.nn.functional as F
 
 def add_Gaussian_noise(img, noise_level1=2, noise_level2=25):
     '''
@@ -431,6 +432,19 @@ def video_maker(frames, video_path='output.mp4', fps=50):
     video.release()
     # to convert an mp4 into gif, run into terminal ffmpeg -i <input.mp4> -vf "fps=100,scale=320:-1:flags=lanczos" <output.gif>
 
+def calculate_entropy(bottleneck):
+    # Flatten the bottleneck (batch_size, channels, height, width) -> (batch_size, -1)
+    batch_size = bottleneck.size(0)
+    bottleneck_flat = bottleneck.view(batch_size, -1)
+
+    # Normalize to get a probability distribution (softmax or simple normalization)
+    probabilities = F.softmax(bottleneck_flat, dim=1)
+    
+    # Calculate the Shannon entropy for each sample in the batch
+    entropy = -torch.sum(probabilities * torch.log2(probabilities + 1e-10), dim=1)
+    
+    # Return the average entropy across the batch
+    return torch.mean(entropy)
     
 if __name__=="__main__":
     main_folder = 'up42_sentinel2_patches'
