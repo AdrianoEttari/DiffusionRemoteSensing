@@ -56,6 +56,7 @@ class ViTModel(nn.Module):
         # Add additional layers if needed for more processing
         self.conv = nn.Conv2d(3, 3, kernel_size=3, stride=1, padding=1)
         self.time_mlp =  self._make_te(self.time_emb_dim, image_channels, device=device)
+        self.batch_norm = nn.BatchNorm2d(image_channels)
 
     def pos_encoding(self, t, channels, device):
         inv_freq = 1.0 / (
@@ -78,6 +79,7 @@ class ViTModel(nn.Module):
     
     def forward(self,  x, timestep, lr_img, magnification_factor):
         image_size = x.shape[-1]
+
         t = timestep.unsqueeze(-1).type(torch.float)
         t = self.pos_encoding(t, self.time_emb_dim, device=self.device)
         t = self.relu(self.time_mlp(t))
@@ -90,10 +92,11 @@ class ViTModel(nn.Module):
         except:
             upsampled_lr_img = F.interpolate(lr_img.to('cpu'), scale_factor=magnification_factor, mode='bicubic').to(self.device)
 
-        upsampled_lr_img = self.conv_upsampled_lr_img(upsampled_lr_img)
+        upsampled_lr_img = self.relu(self.conv_upsampled_lr_img(upsampled_lr_img))
 
-        x = self.conv0(x)
-        x = x + upsampled_lr_img + t
+        x = self.relu(self.conv0(x))
+
+        x = self.batch_norm(x + upsampled_lr_img + t)
         batch_size = x.size(0)
         x = transforms.Resize((224, 224))(x)
         x = self.vit(x)
