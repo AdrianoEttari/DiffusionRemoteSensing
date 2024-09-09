@@ -13,7 +13,8 @@ from utils import video_maker
 import numpy as np
 import torchvision
 
-from UNet_model_generation import Residual_Attention_UNet_generation,EMA
+# from UNet_model_generation import Residual_Attention_UNet_generation,EMA
+from UNet_model_generation_VMHA import Residual_Attention_UNet_generation, Residual_DiffiT_UNet_generation, EMA
 
 import torch
 import torch.nn as nn
@@ -420,8 +421,13 @@ class Diffusion:
                         else:
                             self._save_snapshot(epoch, model)
 
-                    fig, axs = plt.subplots(num_classes,5, figsize=(15,15))
-                    for i in range(num_classes):
+                    if num_classes > 10:
+                        num_rows_plot = 10
+                    else:
+                        num_rows_plot = num_classes
+
+                    fig, axs = plt.subplots(num_rows_plot,5, figsize=(15,15))
+                    for i in range(num_rows_plot):
                         if self.ema_smoothing:
                             prediction = self.sample(n=5,model=ema_model, target_class=torch.tensor([i], dtype=torch.int64).to(self.device), input_channels=train_loader.dataset[0][0].shape[0], generate_video=False)
                         else:
@@ -603,8 +609,11 @@ def launch(args):
         print('Using Residual Visual MultiHead Attention UNet')
         # model = Residual_Visual_MultiHeadAttention_UNet_superres(input_channels, image_size ,output_channels, device).to(device)
         pass
+    elif UNet_type.lower() == 'diffit unet':
+        print('Using Residual DiffiT UNet')
+        model = Residual_DiffiT_UNet_generation(input_channels, output_channels, num_classes, device).to(device)
     else:
-        raise ValueError('The UNet type must be either Residual Attention UNet or Residual MultiHead Attention UNet or Residual Visual MultiHeadAttention UNet superres')
+        raise ValueError('The UNet type must be either Residual Attention UNet or Residual MultiHead Attention UNet or Residual Visual MultiHeadAttention UNet superres or DiffiT UNet')
     print("Num params: ", sum(p.numel() for p in model.parameters()))
 
     if multiple_gpus:
@@ -627,9 +636,14 @@ def launch(args):
     if multiple_gpus:
         destroy_process_group()
 
-    fig, axs = plt.subplots(num_classes,5, figsize=(15,15))
+    if num_classes > 10:
+        num_rows_plot = 10
+    else:
+        num_rows_plot = num_classes
 
-    for i in range(num_classes):
+    fig, axs = plt.subplots(num_rows_plot,5, figsize=(15,15))
+
+    for i in range(num_rows_plot):
         prediction = diffusion.sample(n=5,model=model, target_class=torch.tensor([i], dtype=torch.int64).to(device), input_channels=train_loader.dataset[0][0].shape[0], generate_video=generate_video)
         for j in range(5):
             axs[i,j].imshow(prediction[j].permute(1,2,0).cpu().numpy())
