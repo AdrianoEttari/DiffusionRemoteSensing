@@ -232,13 +232,18 @@ class ResidualBlock(nn.Module):
     def __init__(self, in_channels, out_channels, kernel_size=3, stride=1, padding=1):
         super(ResidualBlock, self).__init__()
         self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size, stride, padding)
+        # self.batch_norm1 = nn.BatchNorm2d(out_channels) ############ TO TEST ############
         self.relu = nn.ReLU(inplace=True)
         self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size, stride, padding)
+        # self.batch_norm2 = nn.BatchNorm2d(out_channels) ############ TO TEST ############
 
     def forward(self, x):
         residual = x
-        out = self.relu(self.conv1(x))
+        out = self.conv1(x)
+        # out = self.batch_norm1(out) ############ TO TEST ############
+        out = self.relu(out)
         out = self.conv2(out)
+        # out = self.batch_norm2(out) ############ TO TEST ############
         out += residual
         return out
 
@@ -606,7 +611,7 @@ class DiffiT_ResBlock(nn.Module):
 
         x_skip = x.clone()
         if x_skip.shape[1] != self.out_channels:
-            x_skip = self.conv_skip((x_skip))
+            x_skip = self.conv_skip(x_skip)
 
         x = self.swish(self.conv(self.batch_norm(x)))
 
@@ -696,9 +701,10 @@ class Residual_DiffiT_UNet_superres(nn.Module):
         x_down3 = self.down3(x3)
         residual_inputs.append(x_down3)
 
+        # UNET (BOTTLENECK)
         x4 = self.bottle_neck(x_down3, t, None)
-        # UNET (UPSAMPLE)
 
+        # UNET (UPSAMPLE)
         x5_up = self.up1(self.batch_norm_up1(x4+residual_inputs[-1]))
         x5 = self.res_block4(x5_up, t, None)
 

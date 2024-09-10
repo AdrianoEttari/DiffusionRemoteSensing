@@ -169,6 +169,9 @@ models_run/Residual_Attention_UNet_superres_magnification4_LRimgsize50_CelebA50k
 up42_sentinel2_patches/
 celebA_10k/
 celebA_100k/
+generate_new_imgs/Cifar10/
+SAR_TO_NDVI_dataset/
+Tiny_ImageNet_200/
 
 # Files
 .DS_Store
