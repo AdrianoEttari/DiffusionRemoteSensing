@@ -9,7 +9,7 @@ import torchvision.transforms as transforms
 from tqdm import tqdm
 from torch.utils.data import DataLoader
 import copy
-from utils import video_maker
+from utils import video_maker, CosineAnnealingWarmupRestarts
 import numpy as np
 import torchvision
 
@@ -322,7 +322,7 @@ class Diffusion:
             print('Early stopping! Training stopped')
             return True
 
-    def train(self, lr, epochs, check_preds_epoch, train_loader, val_loader, patience, loss, verbose):
+    def train(self, lr, epochs, check_preds_epoch, train_loader, val_loader, patience, loss, verbose, lr_scheduler=None):
         '''
         This function performs the training of the model, saves the snapshots and the model at the end of the training each self.every_n_epochs epochs.
 
@@ -335,6 +335,7 @@ class Diffusion:
             patience: the number of epochs after which the training will be stopped if the validation loss is increasing
             loss: the loss function to use
             verbose: if True, the function will use the tqdm during the training and the validation
+            lr_scheduler: the learning rate scheduler
         '''
         num_classes = len(train_loader.dataset.classes)
         model = self.model
@@ -363,6 +364,17 @@ class Diffusion:
                
         epochs_without_improving = 0
         best_loss = float('inf')  
+
+        if lr_scheduler and lr_scheduler.lower() == 'cosine':
+            scheduler = CosineAnnealingWarmupRestarts(
+                optimizer,
+                first_cycle_steps=15,
+                cycle_mult=2,
+                max_lr=lr,
+                min_lr=1e-5,
+                warmup_steps=5,
+                gamma=0.9
+            )
 
         for epoch in range(self.epochs_run, epochs):
             if self.multiple_gpus:
@@ -407,12 +419,21 @@ class Diffusion:
             
                 running_train_loss += train_loss.item()
 
+            if lr_scheduler and lr_scheduler.lower() != 'none':
+                scheduler.step()
             running_train_loss /= len(train_loader) # at the end of each epoch I want the average loss
-            print(f"Epoch {epoch}: Running Train ({loss}) {running_train_loss}")
+            print(f"Epoch {epoch}: Running Train ({loss}) {running_train_loss}; LR: {optimizer.param_groups[0]['lr']}")
 
             # num_classes = None
             # IF THERE ARE MULTIPLE GPUs, MAKE JUST THE FIRST ONE SAVE THE SNAPSHOT AND COMPUTE THE PREDICTIONS TO AVOID REDUNDANCY
             # IN THE ELSE STATEMENT, THERE IS EXACTLY THE SAME. 
+            if num_classes > 10:
+                    num_rows_plot = 10
+            else:
+                num_rows_plot = num_classes
+
+            fig, axs = plt.subplots(num_rows_plot,5, figsize=(15,15))
+
             if self.multiple_gpus:
                 if self.device==0 and epoch % check_preds_epoch == 0:
                     if val_loader is None:
@@ -421,12 +442,6 @@ class Diffusion:
                         else:
                             self._save_snapshot(epoch, model)
 
-                    if num_classes > 10:
-                        num_rows_plot = 10
-                    else:
-                        num_rows_plot = num_classes
-
-                    fig, axs = plt.subplots(num_rows_plot,5, figsize=(15,15))
                     for i in range(num_rows_plot):
                         if self.ema_smoothing:
                             prediction = self.sample(n=5,model=ema_model, target_class=torch.tensor([i], dtype=torch.int64).to(self.device), input_channels=train_loader.dataset[0][0].shape[0], generate_video=False)
@@ -445,8 +460,7 @@ class Diffusion:
                         else:
                             self._save_snapshot(epoch, model)
 
-                    fig, axs = plt.subplots(num_classes,5, figsize=(15,15))
-                    for i in range(num_classes):
+                    for i in range(num_rows_plot):
                         if self.ema_smoothing:
                             prediction = self.sample(n=5,model=ema_model, target_class=torch.tensor([i], dtype=torch.int64).to(self.device), input_channels=train_loader.dataset[0][0].shape[0], generate_video=False)
                         else:
@@ -517,6 +531,7 @@ def launch(args):
         dataset_path: the path of the dataset
         batch_size: the batch size
         lr: the learning rate
+        lr_scheduler: the learning rate scheduler
         epochs: the number of epochs
         noise_schedule: the noise schedule (linear, cosine)
         check_preds_epoch: specifies the frequency, in terms of epochs, at which the model will perform predictions and save them. Moreover,
@@ -540,6 +555,7 @@ def launch(args):
     dataset_path = args.dataset_path
     batch_size = args.batch_size
     lr = args.lr
+    lr_scheduler = args.lr_scheduler
     epochs = args.epochs
     noise_schedule = args.noise_schedule
     check_preds_epoch = args.check_preds_epoch
@@ -568,6 +584,9 @@ def launch(args):
         init_process_group(backend="nccl") # nccl stands for NVIDIA Collective Communication Library. It is used for distributed comunications across multiple GPUs.
     else:
         print('Using a single GPU')
+
+    if lr_scheduler and lr_scheduler.lower() != 'none':
+        print(f'Using {lr_scheduler} learning rate scheduler')
 
     if dataset_path.lower() == 'cifar10':
         transform = transforms.Compose(
@@ -631,7 +650,8 @@ def launch(args):
     # Training 
     diffusion.train(
         lr=lr, epochs=epochs, check_preds_epoch=check_preds_epoch,
-        train_loader=train_loader, val_loader=None, patience=patience, loss=loss, verbose=True)
+        train_loader=train_loader, val_loader=None, patience=patience, loss=loss, 
+        verbose=True, lr_scheduler=lr_scheduler)
     
     if multiple_gpus:
         destroy_process_group()
@@ -663,7 +683,8 @@ if __name__ == '__main__':
     parser.add_argument('--epochs', type=int, default=501)
     parser.add_argument('--batch_size', type=int, default=32)
     parser.add_argument('--image_size', type=int, default=None)
-    parser.add_argument('--lr', type=float, default=3e-4)
+    parser.add_argument('--lr', type=float, default=1e-4)
+    parser.add_argument('--lr_scheduler', type=str, default=None)
     parser.add_argument('--check_preds_epoch', type=int, default=20)
     parser.add_argument('--noise_schedule', type=str, default='cosine')
     parser.add_argument('--snapshot_name', type=str, default='snapshot.pt')
