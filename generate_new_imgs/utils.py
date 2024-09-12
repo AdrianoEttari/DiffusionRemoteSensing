@@ -140,5 +140,29 @@ class CosineAnnealingWarmupRestarts(_LRScheduler):
         for param_group, lr in zip(self.optimizer.param_groups, self.get_lr()):
             param_group['lr'] = lr
 
+def get_real_to_model_classes_dict(num_classes):
+    '''
+                    TO ADJUST! IT MUST BE EMBEDDED INTO THE dataset BUILDER!
+
+    PROBLEM: the classes are not sorted numerically, but lexicographically (i.e. '0','1','10','100','101','102',...,'99')
+    So, when I ask the model to generate an image of the class 2, it will generate an image of the class 10.
+    So, first of all I generate a dictionary (idx_to_class_model) that maps the class index to the class that the
+    model actually generates. 
+    Then, I generate a dictionary (real_to_model_classes_dict) that maps the class index to the class
+    label that the model has given to the class index. This way, I can generate images of the classes that I want.
+
+    Basically the returned dictionary says: "to get this class (index), you must give the model this class (value)"
+    '''
+    classes_list = [str(i) for i in range(num_classes)] 
+    sorted_list = sorted(classes_list)
+    idx_to_class_model = {idx:int(class_) for idx, class_ in enumerate(sorted_list)}
+    values = list(idx_to_class_model.values())
+    idxs = list(idx_to_class_model.keys())
+    sort_mask = np.argsort(list(idx_to_class_model.values())) 
+    sorted_idxs = [idxs[i] for i in sort_mask] # this is equal to sorted_folders
+
+    real_to_model_classes_dict = {idxs[i]:int(sorted_idxs[i]) for i in range(len(sorted_idxs))} 
+    return real_to_model_classes_dict
+
 if __name__=="__main__":
     pass
