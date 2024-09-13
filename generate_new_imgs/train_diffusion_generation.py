@@ -601,7 +601,24 @@ def launch(args):
         transforms.ToTensor(),
             ]) 
         train_path = f'../{dataset_path}'
-        train_dataset = datasets.ImageFolder(train_path, transform=transform)
+
+        class CustomImageFolder(datasets.ImageFolder):
+            def find_classes(self, directory):
+                '''
+                This is the method in ImageFolder that assigns class indices.
+                We override it to sort the classes numerically, not lexicographically.
+                You can write print(dataset.class_to_idx) to see if effectively the classes are sorted numerically.
+                '''
+                classes = [d for d in os.listdir(directory) if os.path.isdir(os.path.join(directory, d))]
+                if classes[0].isdigit():
+                    classes.sort(key=lambda x: int(x))  # Sort classes numerically
+                else:
+                    classes.sort()
+                class_to_idx = {cls_name: i for i, cls_name in enumerate(classes)}
+                return classes, class_to_idx
+            
+        # train_dataset = datasets.ImageFolder(train_path, transform=transform)
+        train_dataset = CustomImageFolder(train_path, transform=transform)
 
     if multiple_gpus:
         train_loader = DataLoader(dataset=train_dataset, batch_size=batch_size, shuffle=False, sampler=DistributedSampler(train_dataset))

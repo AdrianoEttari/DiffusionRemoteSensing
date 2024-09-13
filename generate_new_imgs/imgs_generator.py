@@ -42,11 +42,8 @@ classes = sorted(classes)
 fig, axs = plt.subplots(2, 5, figsize=(15, 6))  # Adjust figsize as needed
 axs = axs.ravel()
 
-real_to_model_classes_dict = get_real_to_model_classes_dict(num_classes)
-
 for i, class_ in enumerate(classes):
-        class_model = real_to_model_classes_dict[class_]
-        prediction = diffusion.sample(n=1,model=model, target_class=torch.tensor([class_model], dtype=torch.int64).to(device), input_channels=input_channels, generate_video=False)
+        prediction = diffusion.sample(n=1,model=model, target_class=torch.tensor([class_], dtype=torch.int64).to(device), input_channels=input_channels, generate_video=False)
         prediction = prediction.clamp(0, 1)
         axs[i].imshow(prediction[0].permute(1,2,0).detach().cpu())
         axs[i].axis('off')
