@@ -605,9 +605,7 @@ class DiffiT_ResBlock(nn.Module):
         time_emb = self.relu(self.time_mlp(t))
         time_emb = time_emb[(..., ) + (None, ) * 2]
 
-        x_skip = x.clone()
-        if x_skip.shape[1] != self.out_channels:
-            x_skip = self.conv_skip(x_skip)
+        x_skip = self.conv_skip(x_skip)
 
         x = self.swish(self.conv(self.batch_norm(x)))
 
