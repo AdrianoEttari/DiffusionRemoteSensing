@@ -433,9 +433,6 @@ class DiffiT_ResBlock(nn.Module):
         time_emb = time_emb[(..., ) + (None, ) * 2]
         x_skip = x.clone()
 
-        # if x_skip.shape[1] != self.out_channels:
-        #     x_skip = self.conv_skip(x_skip)
-
         x_skip = self.conv_skip(x_skip)
         
         x = self.swish(self.conv(self.group_norm(x)))
@@ -457,29 +454,53 @@ class Residual_DiffiT_UNet_generation(nn.Module):
         # considering the trade-off between model complexity and the amount of available data.
 
         self.conv0 = nn.Conv2d(self.image_channels, self.down_channels[0], 3, padding=1) # SINCE THERE IS PADDING 1 AND STRIDE 1,  THE OUTPUT IS THE SAME SIZE OF THE INPUT
+        num_blocks = 4
         
-        self.res_block1 = DiffiT_ResBlock(input_channels=self.down_channels[0], out_channels=self.down_channels[0], time_emb_dim=self.time_emb_dim, device=device)
+        # self.res_block1 = DiffiT_ResBlock(input_channels=self.down_channels[0], out_channels=self.down_channels[0], time_emb_dim=self.time_emb_dim, device=device)
+        self.res_block1 = nn.ModuleList([
+            DiffiT_ResBlock(input_channels=self.down_channels[0], out_channels=self.down_channels[0], time_emb_dim=self.time_emb_dim, device=device) \
+            for _ in range(num_blocks)])
         self.down1 = nn.Conv2d(self.down_channels[0], self.down_channels[0], kernel_size=3, stride=2, padding=1, bias=True, device=device)
 
-        self.res_block2 = DiffiT_ResBlock(input_channels=self.down_channels[0], out_channels=self.down_channels[1],time_emb_dim=self.time_emb_dim, device=device)
+        # self.res_block2 = DiffiT_ResBlock(input_channels=self.down_channels[0], out_channels=self.down_channels[1],time_emb_dim=self.time_emb_dim, device=device)
+        self.res_block2_0 = DiffiT_ResBlock(input_channels=self.down_channels[0], out_channels=self.down_channels[1],time_emb_dim=self.time_emb_dim, device=device)
+        self.res_block2_1 = nn.ModuleList([
+            DiffiT_ResBlock(input_channels=self.down_channels[1], out_channels=self.down_channels[1], time_emb_dim=self.time_emb_dim, device=device) \
+            for _ in range(num_blocks-1)])
         self.down2 = nn.Conv2d(self.down_channels[1], self.down_channels[1], kernel_size=3, stride=2, padding=1, bias=True, device=device)
         
-        self.res_block3 = DiffiT_ResBlock(input_channels=self.down_channels[1], out_channels=self.down_channels[1],time_emb_dim=self.time_emb_dim, device=device)
+        # self.res_block3 = DiffiT_ResBlock(input_channels=self.down_channels[1], out_channels=self.down_channels[1],time_emb_dim=self.time_emb_dim, device=device)
+        self.res_block3 = nn.ModuleList([
+            DiffiT_ResBlock(input_channels=self.down_channels[1], out_channels=self.down_channels[1], time_emb_dim=self.time_emb_dim, device=device) \
+            for _ in range(num_blocks)])
         self.down3 = nn.Conv2d(self.down_channels[1], self.down_channels[1], kernel_size=3, stride=2, padding=1, bias=True, device=device)
 
-        self.bottle_neck = DiffiT_ResBlock(input_channels=self.down_channels[1], out_channels=self.down_channels[1], time_emb_dim=self.time_emb_dim, device=device)
+        # self.bottle_neck = DiffiT_ResBlock(input_channels=self.down_channels[1], out_channels=self.down_channels[1], time_emb_dim=self.time_emb_dim, device=device)
+        self.bottle_neck = nn.ModuleList([
+            DiffiT_ResBlock(input_channels=self.down_channels[1], out_channels=self.down_channels[1], time_emb_dim=self.time_emb_dim, device=device) \
+            for _ in range(num_blocks)])
 
         self.batch_norm_up1 = nn.BatchNorm2d(self.down_channels[1], device=device)
         self.up1 = nn.ConvTranspose2d(self.down_channels[1], self.down_channels[1], kernel_size=3, stride=2, padding=1, output_padding=1, bias=True, device=device)
-        self.res_block4 = DiffiT_ResBlock(input_channels=self.down_channels[1], out_channels=self.down_channels[1], time_emb_dim=self.time_emb_dim, device=device)
+        # self.res_block4 = DiffiT_ResBlock(input_channels=self.down_channels[1], out_channels=self.down_channels[1], time_emb_dim=self.time_emb_dim, device=device)
+        self.res_block4 = nn.ModuleList([
+            DiffiT_ResBlock(input_channels=self.down_channels[1], out_channels=self.down_channels[1], time_emb_dim=self.time_emb_dim, device=device) \
+            for _ in range(num_blocks)])
 
         self.batch_norm_up2 = nn.BatchNorm2d(self.down_channels[1], device=device)
         self.up2 = nn.ConvTranspose2d(self.down_channels[1], self.down_channels[1], kernel_size=3, stride=2, padding=1, output_padding=1, bias=True, device=device)
-        self.res_block5 = DiffiT_ResBlock(input_channels=self.down_channels[1], out_channels=self.down_channels[0], time_emb_dim=self.time_emb_dim, device=device)
+        # self.res_block5 = DiffiT_ResBlock(input_channels=self.down_channels[1], out_channels=self.down_channels[0], time_emb_dim=self.time_emb_dim, device=device)
+        self.res_block5_0 = DiffiT_ResBlock(input_channels=self.down_channels[1], out_channels=self.down_channels[0], time_emb_dim=self.time_emb_dim, device=device)
+        self.res_block5_1 = nn.ModuleList([
+            DiffiT_ResBlock(input_channels=self.down_channels[0], out_channels=self.down_channels[0], time_emb_dim=self.time_emb_dim, device=device) \
+            for _ in range(num_blocks-1)])
 
         self.batch_norm_up3 = nn.BatchNorm2d(self.down_channels[0], device=device)
         self.up3 = nn.ConvTranspose2d(self.down_channels[0], self.down_channels[0], kernel_size=3, stride=2, padding=1, output_padding=1, bias=True, device=device)
-        self.res_block6 = DiffiT_ResBlock(input_channels=self.down_channels[0], out_channels=self.down_channels[0], time_emb_dim=self.time_emb_dim, device=device)
+        # self.res_block6 = DiffiT_ResBlock(input_channels=self.down_channels[0], out_channels=self.down_channels[0], time_emb_dim=self.time_emb_dim, device=device)
+        self.res_block6 = nn.ModuleList([
+            DiffiT_ResBlock(input_channels=self.down_channels[0], out_channels=self.down_channels[0], time_emb_dim=self.time_emb_dim, device=device) \
+            for _ in range(num_blocks)])
 
         self.output = nn.Conv2d(self.down_channels[0], self.out_dim, 1)
 
@@ -508,30 +529,51 @@ class Residual_DiffiT_UNet_generation(nn.Module):
 
         # UNET (DOWNSAMPLE)        
         residual_inputs = []
-        x1 = self.res_block1(x, t)
+        # x1 = self.res_block1(x, t)
+        x1 = x.clone()
+        for i, res_block1 in enumerate(self.res_block1):
+            x1 = res_block1(x1, t)
         x_down1 = self.down1(x1)
         residual_inputs.append(x_down1)
 
-        x2 = self.res_block2(x_down1, t)
+        # x2 = self.res_block2(x_down1, t)
+        x2 = x_down1.clone()
+        x2 = self.res_block2_0(x2, t)
+        for i, res_block2 in enumerate(self.res_block2_1):
+            x2 = res_block2(x2, t)
         x_down2 = self.down2(x2)
         residual_inputs.append(x_down2)
 
-        x3 = self.res_block3(x_down2, t)
+        # x3 = self.res_block3(x_down2, t)
+        x3 = x_down2.clone()
+        for i, res_block3 in enumerate(self.res_block3):
+            x3 = res_block3(x3, t)
         x_down3 = self.down3(x3)
         residual_inputs.append(x_down3)
 
         # UNET (BOTTLENECK)
-        x4 = self.bottle_neck(x_down3, t)
+        # x4 = self.bottle_neck(x_down3, t)
+        x4 = x_down3.clone()
 
         # UNET (UPSAMPLE)
         x5_up = self.up1(self.batch_norm_up1(x4+residual_inputs[-1]))
-        x5 = self.res_block4(x5_up, t)
+        # x5 = self.res_block4(x5_up, t)
+        x5 = x5_up.clone()
+        for i, res_block4 in enumerate(self.res_block4):
+            x5 = res_block4(x5, t)
 
         x6_up = self.up2(self.batch_norm_up2(x5+residual_inputs[-2]))
-        x6 = self.res_block5(x6_up, t)
+        # x6 = self.res_block5(x6_up, t)
+        x6 = x6_up.clone()
+        x6 = self.res_block5_0(x6, t)
+        for i, res_block5 in enumerate(self.res_block5_1):
+            x6 = res_block5(x6, t)
 
         x7_up = self.up3(self.batch_norm_up3(x6+residual_inputs[-3]))
-        x7 = self.res_block6(x7_up, t)
+        # x7 = self.res_block6(x7_up, t)
+        x7 = x7_up.clone()
+        for i, res_block6 in enumerate(self.res_block6):
+            x7 = res_block6(x7, t)
 
         return self.output(x7)
 
