@@ -16,8 +16,6 @@ import torchvision
 # from UNet_model_generation import Residual_Attention_UNet_generation,EMA
 from UNet_model_generation_VMHA import Residual_Attention_UNet_generation, Residual_DiffiT_UNet_generation, EMA
 
-import torch
-import torch.nn as nn
 import torchvision.models as models
 import torchvision.transforms as transforms
 import torch.nn.functional as F
@@ -581,7 +579,8 @@ def launch(args):
     
     if multiple_gpus:
         print('Using multiple GPUs')
-        init_process_group(backend="nccl") # nccl stands for NVIDIA Collective Communication Library. It is used for distributed comunications across multiple GPUs.
+        # init_process_group(backend="nccl") # nccl stands for NVIDIA Collective Communication Library. It is used for distributed comunications across multiple GPUs.
+        init_process_group(backend="nccl", world_size=int(os.environ['WORLD_SIZE']), rank=int(os.environ['RANK']))
     else:
         print('Using a single GPU')
 

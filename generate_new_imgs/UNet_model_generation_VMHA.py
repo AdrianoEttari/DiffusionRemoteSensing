@@ -454,7 +454,7 @@ class Residual_DiffiT_UNet_generation(nn.Module):
         # considering the trade-off between model complexity and the amount of available data.
 
         self.conv0 = nn.Conv2d(self.image_channels, self.down_channels[0], 3, padding=1) # SINCE THERE IS PADDING 1 AND STRIDE 1,  THE OUTPUT IS THE SAME SIZE OF THE INPUT
-        num_blocks = 4
+        num_blocks = 3
         
         # self.res_block1 = DiffiT_ResBlock(input_channels=self.down_channels[0], out_channels=self.down_channels[0], time_emb_dim=self.time_emb_dim, device=device)
         self.res_block1 = nn.ModuleList([
