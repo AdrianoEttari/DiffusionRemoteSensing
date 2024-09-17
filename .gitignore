@@ -172,6 +172,8 @@ celebA_100k/
 generate_new_imgs/Cifar10/
 SAR_TO_NDVI_dataset/
 Tiny_ImageNet_200/
+ImageNet256/
+ImageNet256_small/
 
 # Files
 .DS_Store
