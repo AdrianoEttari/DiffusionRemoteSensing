@@ -620,9 +620,9 @@ def launch(args):
         train_dataset = CustomImageFolder(train_path, transform=transform)
 
     if multiple_gpus:
-        train_loader = DataLoader(dataset=train_dataset, batch_size=batch_size, shuffle=False, sampler=DistributedSampler(train_dataset))
+        train_loader = DataLoader(dataset=train_dataset, batch_size=batch_size, pin_memory=True, shuffle=False, sampler=DistributedSampler(train_dataset))
     else:
-        train_loader = DataLoader(dataset=train_dataset, batch_size=batch_size, shuffle=True)
+        train_loader = DataLoader(dataset=train_dataset, batch_size=batch_size, pin_memory=True, shuffle=True)
 
     num_classes = len(train_loader.dataset.classes)
 
