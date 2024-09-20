@@ -4,6 +4,9 @@ from PIL import Image,ImageDraw,ImageFont
 import cv2
 from torch.optim.lr_scheduler import _LRScheduler
 import math
+from torchvision import datasets
+import os
+from torchvision import transforms
 
 def video_maker(frames, video_path='output.mp4', fps=50):
     '''
@@ -163,6 +166,33 @@ def get_real_to_model_classes_dict(num_classes):
 
     real_to_model_classes_dict = {idxs[i]:int(sorted_idxs[i]) for i in range(len(sorted_idxs))} 
     return real_to_model_classes_dict
+
+class CustomImageFolder(datasets.ImageFolder):
+    def find_classes(self, directory):
+        '''
+        This is the method in ImageFolder that assigns class indices.
+        We override it to sort the classes numerically, not lexicographically.
+        You can write print(dataset.class_to_idx) to see if effectively the classes are sorted numerically.
+        '''
+        classes = [d for d in os.listdir(directory) if os.path.isdir(os.path.join(directory, d))]
+        if classes[0].isdigit():
+            classes.sort(key=lambda x: int(x))  # Sort classes numerically
+        else:
+            classes.sort()
+        class_to_idx = {cls_name: i for i, cls_name in enumerate(classes)}
+        return classes, class_to_idx
+
+def dataset_maker(image_size, dataset_path):
+    transform = transforms.Compose([
+    transforms.Resize((image_size, image_size)),
+    transforms.ToTensor(),
+        ]) 
+    data_path = f'../{dataset_path}'
+
+    # dataset = datasets.ImageFolder(data_path, transform=transform)
+    dataset = CustomImageFolder(data_path, transform=transform)
+    return dataset
+
 
 if __name__=="__main__":
     pass

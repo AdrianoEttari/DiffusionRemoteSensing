@@ -4,78 +4,20 @@ import torch
 import torch.nn as nn
 import torch.optim
 import torch.utils.data
-from torchvision import datasets
 import torchvision.transforms as transforms
 from tqdm import tqdm
 from torch.utils.data import DataLoader
 import copy
-from utils import video_maker, CosineAnnealingWarmupRestarts
+from utils import video_maker, CosineAnnealingWarmupRestarts, dataset_maker
 import numpy as np
-import torchvision
+import torchvision.datasets as datasets
 
 # from UNet_model_generation import Residual_Attention_UNet_generation,EMA
 from UNet_model_generation_VMHA import Residual_Attention_UNet_generation, Residual_DiffiT_UNet_generation, EMA
 
-import torchvision.models as models
-import torchvision.transforms as transforms
-import torch.nn.functional as F
-
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.distributed import init_process_group, destroy_process_group
 from torch.utils.data.distributed import DistributedSampler
-
-class VGGPerceptualLoss(nn.Module):
-    def __init__(self, device):
-        super(VGGPerceptualLoss, self).__init__()
-        self.vgg = models.vgg19(weights=models.VGG19_Weights.DEFAULT).features
-        # By using .features, we are considering just the convolutional part of the VGG network
-        # without considering the avg pooling and the fully connected layers which map the features to the 1000 classes
-        # and so, solve the classification task.
-        # self.vgg = nn.Sequential(*[self.vgg[i] for i in range(8)]) 
-        self.vgg.to(device)
-        self.vgg.eval()  # Set VGG to evaluation mode
-        self.device = device
-        # Freeze all VGG parameters
-        for param in self.vgg.parameters():
-            param.requires_grad = False
-        
-    def preprocess_image(self, image):
-        '''
-        The VGG network wants input sized (224,224), normalized and as pytorch tensor. 
-        '''
-        transform = transforms.Compose([
-                transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-            ])
-        
-        if image.shape[-1] != 224:
-            try:
-                image = F.interpolate(image, size=(224, 224), mode='bicubic', align_corners=False)
-            except:
-                image = F.interpolate(image.to('cpu'),  size=(224, 224), mode='bicubic', align_corners=False).to(self.device)
-        
-        return transform(image)
-    
-    def forward(self, x, y):
-        x = self.preprocess_image(x)
-        y = self.preprocess_image(y)
-
-        x_features = self.vgg(x)
-        y_features = self.vgg(y)
-
-        return torch.mean((x_features-y_features)**2)
-
-class CombinedLoss(nn.Module):
-    def __init__(self, first_loss, second_loss, weight_first=0.5):
-        super(CombinedLoss, self).__init__()
-        self.first_loss = first_loss
-        self.second_loss = second_loss
-        self.weight_first = weight_first  
-
-    def forward(self, predicted, target):
-        first_loss_value = self.first_loss(predicted, target)
-        second_loss_value = self.second_loss(predicted, target)
-        combined_loss = self.weight_first * first_loss_value + (1-self.weight_first) * second_loss_value
-        return combined_loss
     
 class Diffusion:
     def __init__(
@@ -235,9 +177,9 @@ class Diffusion:
                 t = (torch.ones(n) * i).long().to(self.device) # tensor of shape (n) with all the elements equal to i.
                 # Basically, each of the n image will be processed with the same integer time step t.
                 
-                predicted_noise = model(x, t, target_class)
+                predicted_noise = model(x, t, target_class).to(self.device) 
                 if cfg_scale > 0:
-                    uncond_predicted_noise = model(x, t, None)
+                    uncond_predicted_noise = model(x, t, None).to(self.device) 
                     predicted_noise = torch.lerp(uncond_predicted_noise, predicted_noise, cfg_scale) # Compute the formula of the CFG paper https://arxiv.org/abs/2207.12598
 
                 alpha = self.alpha[t][:, None, None, None]
@@ -320,7 +262,7 @@ class Diffusion:
             print('Early stopping! Training stopped')
             return True
 
-    def train(self, lr, epochs, check_preds_epoch, train_loader, val_loader, patience, loss, verbose, lr_scheduler=None):
+    def train(self, lr, epochs, check_preds_epoch, train_loader, val_loader, patience, loss, lr_scheduler=None):
         '''
         This function performs the training of the model, saves the snapshots and the model at the end of the training each self.every_n_epochs epochs.
 
@@ -332,15 +274,14 @@ class Diffusion:
             val_loader: the validation loader
             patience: the number of epochs after which the training will be stopped if the validation loss is increasing
             loss: the loss function to use
-            verbose: if True, the function will use the tqdm during the training and the validation
             lr_scheduler: the learning rate scheduler
         '''
         num_classes = len(train_loader.dataset.classes)
         model = self.model
 
         if self.ema_smoothing:
-            ema = EMA(beta=0.995)############################# EMA ############################
-            ema_model = copy.deepcopy(model).eval().requires_grad_(False)############################# EMA ############################
+            ema = EMA(beta=0.995)
+            ema_model = copy.deepcopy(model).eval().requires_grad_(False)
 
         optimizer = torch.optim.Adam(model.parameters(), lr=lr)
         # optimizer = torch.optim.AdamW(model.parameters(), lr=lr) # AdamW is a variant of Adam that adds weight decay (L2 regularization)
@@ -353,15 +294,9 @@ class Diffusion:
             loss_function = nn.L1Loss()
         elif loss == 'Huber':
             loss_function = nn.HuberLoss() 
-        elif loss == 'MSE+Perceptual_noise':
-            vgg_loss = VGGPerceptualLoss(self.device)
-            mse_loss = nn.MSELoss()
-            loss_function = CombinedLoss(first_loss=mse_loss, second_loss=vgg_loss, weight_first=0.3)
         else:
-            raise ValueError('The Loss must be either MSE or MAE or Huber or MSE+Perceptual_noise')
+            raise ValueError('The Loss must be either MSE or MAE or Huber')
                
-        epochs_without_improving = 0
-        best_loss = float('inf')  
 
         if lr_scheduler and lr_scheduler.lower() == 'cosine':
             scheduler = CosineAnnealingWarmupRestarts(
@@ -374,17 +309,16 @@ class Diffusion:
                 gamma=0.9
             )
 
+        epochs_without_improving = 0
+        best_val_loss = float('inf')  
+
         for epoch in range(self.epochs_run, epochs):
             if self.multiple_gpus:
                 train_loader.sampler.set_epoch(epoch) # ensures that the data is shuffled in a consistent manner across multiple epochs (it is useful just for the DistributedSampler)
-            if verbose:
-                pbar_train = tqdm(train_loader,desc='Training', position=0)
-                if val_loader is not None:
-                    pbar_val = tqdm(val_loader,desc='Validation', position=0)
-            else:
-                pbar_train = train_loader
-                if val_loader is not None:
-                    pbar_val = val_loader
+
+            pbar_train = tqdm(train_loader,desc='Training', position=0)
+            if val_loader is not None:
+                pbar_val = tqdm(val_loader,desc='Validation', position=0)
 
             running_train_loss = 0.0
             running_val_loss = 0.0
@@ -394,9 +328,8 @@ class Diffusion:
                 label = label.to(self.device)
                 img = img.to(self.device)
 
-                t = self.sample_timesteps(img.shape[0]).to(self.device)
-                # t is a unidimensional tensor of shape (images.shape[0] that is the batch_size) with random integers from 1 to noise_steps.
-                x_t, noise = self.noise_images(img, t) # get batch_size noise images
+                t = self.sample_timesteps(img.shape[0]).to(self.device) # t is a unidimensional tensor of shape (images.shape[0] that is the batch_size) with random integers from 1 to noise_steps.
+                x_t, noise = self.noise_images(img, t) # get batch_size noised images and the corresponding noise
 
                 optimizer.zero_grad() # set the gradients to 0
 
@@ -410,64 +343,39 @@ class Diffusion:
                 optimizer.step() # update the weights
                 
                 if self.ema_smoothing:
-                    ema.step_ema(ema_model, model)############################# EMA ############################
+                    ema.step_ema(ema_model, model)
 
-                if verbose:
-                    pbar_train.set_postfix(LOSS=train_loss.item()) # set_postfix just adds a message or value displayed after the progress bar. In this case the loss of the current batch.
+                pbar_train.set_postfix(LOSS=train_loss.item()) # set_postfix just adds a message or value displayed after the progress bar. In this case the loss of the current batch.
             
                 running_train_loss += train_loss.item()
 
             if lr_scheduler and lr_scheduler.lower() != 'none':
                 scheduler.step()
+
             running_train_loss /= len(train_loader) # at the end of each epoch I want the average loss
             print(f"Epoch {epoch}: Running Train ({loss}) {running_train_loss}; LR: {optimizer.param_groups[0]['lr']}")
 
-            # num_classes = None
-            # IF THERE ARE MULTIPLE GPUs, MAKE JUST THE FIRST ONE SAVE THE SNAPSHOT AND COMPUTE THE PREDICTIONS TO AVOID REDUNDANCY
+            # TO AVOID REDUNDANCY, IF THERE ARE MULTIPLE GPUs, MAKE JUST THE FIRST ONE SAVE THE SNAPSHOT (THAT WILL BE SAVED AT EACH EPOCH IF THERE IS NO VALIDATION SET) AND PLOT THE PREDICTIONS.
             # IN THE ELSE STATEMENT, THERE IS EXACTLY THE SAME. 
-            if num_classes > 10:
-                    num_rows_plot = 10
-            else:
-                num_rows_plot = num_classes
-
-            fig, axs = plt.subplots(num_rows_plot,5, figsize=(15,15))
-
             if self.multiple_gpus:
                 if self.device==0 and epoch % check_preds_epoch == 0:
                     if val_loader is None:
                         if self.ema_smoothing:
-                            self._save_snapshot(epoch, ema_model)############################# EMA ############################
+                            self._save_snapshot(epoch, ema_model)
                         else:
                             self._save_snapshot(epoch, model)
-
-                    for i in range(num_rows_plot):
-                        if self.ema_smoothing:
-                            prediction = self.sample(n=5,model=ema_model, target_class=torch.tensor([i], dtype=torch.int64).to(self.device), input_channels=train_loader.dataset[0][0].shape[0], generate_video=False)
-                        else:
-                            prediction = self.sample(n=5,model=model, target_class=torch.tensor([i], dtype=torch.int64).to(self.device), input_channels=train_loader.dataset[0][0].shape[0], generate_video=False)
-                        for j in range(5):
-                            axs[i,j].imshow(prediction[j].permute(1,2,0).cpu().numpy())
-                            axs[i,j].set_title(f'Class {i}')
-
-                    plt.savefig(os.path.join('..', 'models_run', self.model_name, 'results', f'generation_{epoch}_epoch.png'))
             else:
                 if epoch % check_preds_epoch == 0:
-                    if val_loader is None: # if there is no validation loader, then we save the weights at the frequency check_preds_epoch
+                    if val_loader is None:
                         if self.ema_smoothing:
-                            self._save_snapshot(epoch, ema_model)############################# EMA ############################
+                            self._save_snapshot(epoch, ema_model)
                         else:
                             self._save_snapshot(epoch, model)
 
-                    for i in range(num_rows_plot):
-                        if self.ema_smoothing:
-                            prediction = self.sample(n=5,model=ema_model, target_class=torch.tensor([i], dtype=torch.int64).to(self.device), input_channels=train_loader.dataset[0][0].shape[0], generate_video=False)
-                        else:
-                            prediction = self.sample(n=5,model=model, target_class=torch.tensor([i], dtype=torch.int64).to(self.device), input_channels=train_loader.dataset[0][0].shape[0], generate_video=False)
-                        for j in range(5):
-                            axs[i,j].imshow(prediction[j].permute(1,2,0).cpu().numpy())
-                            axs[i,j].set_title(f'Class {i}')
-
-                    plt.savefig(os.path.join('..', 'models_run', self.model_name, 'results', f'generation_{epoch}_epoch.png'))
+            if self.ema_smoothing:
+                self.prediction_plot(num_classes, ema_model, train_loader, epoch)
+            else:
+                self.prediction_plot(num_classes, model, train_loader, epoch)
 
             if val_loader is not None:
                 with torch.no_grad():
@@ -477,40 +385,38 @@ class Diffusion:
                         label = label.to(self.device)
                         img = img.to(self.device)
 
-                        t = self.sample_timesteps(img.shape[0]).to(self.device)
-                        # t is a unidimensional tensor of shape (images.shape[0] that is the batch_size)with random integers from 1 to noise_steps.
+                        t = self.sample_timesteps(img.shape[0]).to(self.device) # t is a unidimensional tensor of shape (images.shape[0] that is the batch_size)with random integers from 1 to noise_steps.
                         x_t, noise = self.noise_images(img, t) # get batch_size noise images
                         
                         if np.random.random() < 0.1: # 10% of the time, don't pass labels (we train 10% of the times uncoditionally and 90% conditionally)
                             label = None
+                            
                         if self.ema_smoothing:
-                            predicted_noise = ema_model(x_t, t, label) ############################# EMA ############################
+                            predicted_noise = ema_model(x_t, t, label) 
                         else:
                             predicted_noise = model(x_t, t, label) # here we pass the plain labels to the model (i.e. 0,1,2,...,9 if there are 10 classes)
 
                         val_loss = loss_function(predicted_noise, noise)
 
-                        if verbose:
-                            pbar_val.set_postfix(LOSS=val_loss.item()) # set_postfix just adds a message or value
-                        # displayed after the progress bar. In this case the loss of the current batch.
+                        pbar_val.set_postfix(LOSS=val_loss.item())
 
                         running_val_loss += val_loss.item()
 
                     running_val_loss /= len(val_loader)
                     print(f"Epoch {epoch}: Running Val loss ({loss}){running_val_loss}")
 
-                if running_val_loss < best_loss - 0:
-                    best_loss = running_val_loss
+                if running_val_loss < best_val_loss - 0:
+                    best_val_loss = running_val_loss
                     epochs_without_improving = 0
                     if self.multiple_gpus:
                         if self.device==0:
                             if self.ema_smoothing:
-                                self._save_snapshot(epoch, ema_model)############################# EMA ############################
+                                self._save_snapshot(epoch, ema_model)
                             else:
                                 self._save_snapshot(epoch, model)
                     else:
                         if self.ema_smoothing:
-                            self._save_snapshot(epoch, ema_model)############################# EMA ############################
+                            self._save_snapshot(epoch, ema_model)
                         else:
                             self._save_snapshot(epoch, model)  
                 else:
@@ -518,7 +424,24 @@ class Diffusion:
 
                 if self.early_stopping(patience, epochs_without_improving):
                     break
-            print('Epochs without improving: ', epochs_without_improving)
+
+                print('Epochs without improving: ', epochs_without_improving)
+    
+    def prediction_plot(self, num_classes, model, train_loader, epoch):
+        if num_classes > 10:
+            num_rows_plot = 10
+        else:
+            num_rows_plot = num_classes
+
+        fig, axs = plt.subplots(num_rows_plot,5, figsize=(15,15))
+
+        for i in range(num_rows_plot):
+            prediction = self.sample(n=5,model=model, target_class=torch.tensor([i], dtype=torch.int64).to(self.device), input_channels=train_loader.dataset[0][0].shape[0], generate_video=False)
+            for j in range(5):
+                axs[i,j].imshow(prediction[j].permute(1,2,0).cpu().numpy())
+                axs[i,j].set_title(f'Class {i}')
+        
+        plt.savefig(os.path.join('..', 'models_run', self.model_name, 'results', f'generation_{epoch}_epoch.png'))
 
 def launch(args):
     '''
@@ -579,9 +502,13 @@ def launch(args):
     
     if multiple_gpus:
         print('Using multiple GPUs')
-        # init_process_group(backend="nccl") # nccl stands for NVIDIA Collective Communication Library. It is used for distributed comunications across multiple GPUs.
-        init_process_group(backend="nccl", world_size=int(os.environ['WORLD_SIZE']), rank=int(os.environ['RANK']))
+        init_process_group(backend="nccl") # nccl stands for NVIDIA Collective Communication Library. It is used for distributed comunications across multiple GPUs.
+        # init_process_group(backend="nccl", world_size=int(os.environ['WORLD_SIZE']), rank=int(os.environ['RANK']))
+        gpu_id = int(os.environ["LOCAL_RANK"])
+        torch.cuda.set_device(int(gpu_id))
+        device = gpu_id
     else:
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         print('Using a single GPU')
 
     if lr_scheduler and lr_scheduler.lower() != 'none':
@@ -590,48 +517,19 @@ def launch(args):
     if dataset_path.lower() == 'cifar10':
         transform = transforms.Compose(
         [transforms.ToTensor()])
-        train_dataset = torchvision.datasets.CIFAR10(root='./Cifar10', train=True,
+        train_dataset = datasets.CIFAR10(root='./Cifar10', train=True,
                                             download=True, transform=transform)
-        image_size = 32
+        args.image_size = 32
     else:
-        image_size = args.image_size
-        transform = transforms.Compose([
-        transforms.Resize((image_size, image_size)),
-        transforms.ToTensor(),
-            ]) 
-        train_path = f'../{dataset_path}'
-
-        class CustomImageFolder(datasets.ImageFolder):
-            def find_classes(self, directory):
-                '''
-                This is the method in ImageFolder that assigns class indices.
-                We override it to sort the classes numerically, not lexicographically.
-                You can write print(dataset.class_to_idx) to see if effectively the classes are sorted numerically.
-                '''
-                classes = [d for d in os.listdir(directory) if os.path.isdir(os.path.join(directory, d))]
-                if classes[0].isdigit():
-                    classes.sort(key=lambda x: int(x))  # Sort classes numerically
-                else:
-                    classes.sort()
-                class_to_idx = {cls_name: i for i, cls_name in enumerate(classes)}
-                return classes, class_to_idx
-            
-        # train_dataset = datasets.ImageFolder(train_path, transform=transform)
-        train_dataset = CustomImageFolder(train_path, transform=transform)
+        train_dataset = dataset_maker(args.image_size, dataset_path)
 
     if multiple_gpus:
-        train_loader = DataLoader(dataset=train_dataset, batch_size=batch_size, pin_memory=True, shuffle=False, sampler=DistributedSampler(train_dataset))
+        train_loader = DataLoader(dataset=train_dataset, batch_size=batch_size, shuffle=False, sampler=DistributedSampler(train_dataset, shuffle=True))
     else:
-        train_loader = DataLoader(dataset=train_dataset, batch_size=batch_size, pin_memory=True, shuffle=True)
+        train_loader = DataLoader(dataset=train_dataset, batch_size=batch_size, shuffle=True)
 
     num_classes = len(train_loader.dataset.classes)
 
-    if multiple_gpus:
-        gpu_id = int(os.environ["LOCAL_RANK"])
-        torch.cuda.set_device(int(gpu_id))
-        device = gpu_id
-    else:
-        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     if UNet_type.lower() == 'residual attention unet':
         print('Using Residual Attention UNet')
@@ -652,7 +550,8 @@ def launch(args):
     print("Num params: ", sum(p.numel() for p in model.parameters()))
 
     if multiple_gpus:
-        model = DDP(model, device_ids=[device], find_unused_parameters=True)
+        # model = DDP(model, device_ids=[device], find_unused_parameters=True)
+        model = DDP(model, device_ids=[device])
 
     snapshot_path = os.path.join(snapshot_folder_path, snapshot_name)
 
@@ -660,14 +559,13 @@ def launch(args):
         noise_schedule=noise_schedule, model=model,
         snapshot_path=snapshot_path,
         noise_steps=noise_steps, beta_start=1e-4, beta_end=0.02,
-        device=device, image_size=image_size, model_name=model_name,
+        device=device, image_size=args.image_size, model_name=model_name,
         multiple_gpus=multiple_gpus, ema_smoothing=ema_smoothing)
 
     # Training 
     diffusion.train(
         lr=lr, epochs=epochs, check_preds_epoch=check_preds_epoch,
-        train_loader=train_loader, val_loader=None, patience=patience, loss=loss, 
-        verbose=True, lr_scheduler=lr_scheduler)
+        train_loader=train_loader, val_loader=None, patience=patience, loss=loss, lr_scheduler=lr_scheduler)
     
     if multiple_gpus:
         destroy_process_group()
