@@ -362,20 +362,19 @@ class Diffusion:
                     if val_loader is None:
                         if self.ema_smoothing:
                             self._save_snapshot(epoch, ema_model)
+                            self.prediction_plot(num_classes, ema_model, train_loader, epoch)
                         else:
                             self._save_snapshot(epoch, model)
+                            self.prediction_plot(num_classes, model, train_loader, epoch)
             else:
                 if epoch % check_preds_epoch == 0:
                     if val_loader is None:
                         if self.ema_smoothing:
                             self._save_snapshot(epoch, ema_model)
+                            self.prediction_plot(num_classes, ema_model, train_loader, epoch)
                         else:
                             self._save_snapshot(epoch, model)
-
-            if self.ema_smoothing:
-                self.prediction_plot(num_classes, ema_model, train_loader, epoch)
-            else:
-                self.prediction_plot(num_classes, model, train_loader, epoch)
+                            self.prediction_plot(num_classes, model, train_loader, epoch)
 
             if val_loader is not None:
                 with torch.no_grad():
@@ -534,24 +533,16 @@ def launch(args):
     if UNet_type.lower() == 'residual attention unet':
         print('Using Residual Attention UNet')
         model = Residual_Attention_UNet_generation(input_channels, output_channels, num_classes, device).to(device)
-    elif UNet_type.lower() == 'residual multihead attention unet':
-        print('Using Residual MultiHead Attention UNet')
-        # model = Residual_MultiHeadAttention_UNet_superres(input_channels, output_channels, device).to(device)
-        pass
-    elif UNet_type.lower() == 'residual visual multihead attention unet':
-        print('Using Residual Visual MultiHead Attention UNet')
-        # model = Residual_Visual_MultiHeadAttention_UNet_superres(input_channels, image_size ,output_channels, device).to(device)
-        pass
     elif UNet_type.lower() == 'diffit unet':
         print('Using Residual DiffiT UNet')
         model = Residual_DiffiT_UNet_generation(input_channels, output_channels, num_classes, device).to(device)
     else:
-        raise ValueError('The UNet type must be either Residual Attention UNet or Residual MultiHead Attention UNet or Residual Visual MultiHeadAttention UNet superres or DiffiT UNet')
+        raise ValueError('The UNet type must be either Residual Attention UNet or DiffiT UNet')
     print("Num params: ", sum(p.numel() for p in model.parameters()))
 
     if multiple_gpus:
-        # model = DDP(model, device_ids=[device], find_unused_parameters=True)
-        model = DDP(model, device_ids=[device])
+        model = DDP(model, device_ids=[device], find_unused_parameters=True)
+        # model = DDP(model, device_ids=[device])
 
     snapshot_path = os.path.join(snapshot_folder_path, snapshot_name)
 
