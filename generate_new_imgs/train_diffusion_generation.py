@@ -362,10 +362,10 @@ class Diffusion:
                     if val_loader is None:
                         if self.ema_smoothing:
                             self._save_snapshot(epoch, ema_model)
-                            self.prediction_plot(num_classes, ema_model, train_loader, epoch)
+                            # self.prediction_plot(num_classes, ema_model, train_loader, epoch)
                         else:
                             self._save_snapshot(epoch, model)
-                            self.prediction_plot(num_classes, model, train_loader, epoch)
+                            # self.prediction_plot(num_classes, model, train_loader, epoch)
             else:
                 if epoch % check_preds_epoch == 0:
                     if val_loader is None:
