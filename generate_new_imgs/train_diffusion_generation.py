@@ -2,8 +2,6 @@ import os
 import matplotlib.pyplot as plt
 import torch
 import torch.nn as nn
-import torch.optim
-import torch.utils.data
 import torchvision.transforms as transforms
 from tqdm import tqdm
 from torch.utils.data import DataLoader
@@ -248,10 +246,10 @@ class Diffusion:
         else:
             snapshot = torch.load(self.snapshot_path, map_location=self.device)
             self.model.load_state_dict(snapshot["MODEL_STATE"])
-            self.epochs_run = snapshot["EPOCHS_RUN"]
 
         self.epochs_run = snapshot["EPOCHS_RUN"]
-        print(f"Resuming training from snapshot at Epoch {self.epochs_run}")
+        # print(f"Resuming training from snapshot at Epoch {self.epochs_run}")
+        print(f"Snapshot loaded from {self.snapshot_path}")
 
     def early_stopping(self, patience, epochs_without_improving):
         '''
