@@ -7,7 +7,7 @@ from numpy import pi, exp, sqrt
 from tqdm import tqdm 
 
 class split_aggregation_sampling:
-    def __init__(self, img_lr, patch_size, stride, magnification_factor, diffusion_model, device):
+    def __init__(self, img_lr, patch_size, stride, magnification_factor, device='cpu'):
         '''
         This class is used to perform a split of an image into patches (with the patchifier function)
         and also to aggregate the super-resolution of the generated patches (with the aggregation_sampling function).
@@ -18,10 +18,8 @@ class split_aggregation_sampling:
         self.patch_size = patch_size
         self.stride = stride
         self.magnification_factor = magnification_factor
-        self.diffusion_model = diffusion_model
 
         self.device = device
-        self.model = diffusion_model.model
         batch_size, channels, height, width = img_lr.shape
 
         self.patches_lr, self.patches_sr_infos = self.patchifier(img_lr, patch_size, stride, magnification_factor)
@@ -73,7 +71,7 @@ class split_aggregation_sampling:
         # plt.close()
         return patches_lr, patches_sr_infos
 
-    def aggregation_sampling(self):
+    def aggregation_sampling(self, diffusion_model):
         '''
         This function iterates over the low resolution patches in self.patches_lr for each patch it generates a super-resolution
         patch using the diffusion model. Afterwords it takes the product between the super-resolution patch and the gaussian weight
@@ -84,6 +82,8 @@ class split_aggregation_sampling:
         '''
         img_lr = self.img_lr
         magnification_factor = self.magnification_factor
+        self.diffusion_model = diffusion_model
+        self.model = diffusion_model.model
 
         batch_size, channels, height, width = img_lr.shape
         # Initialize two tensors of the same shape (super-resolution image shape). im_res will be the final image that will be
@@ -198,8 +198,8 @@ def launch(args):
         image_size=model_input_size, model_name=model_name, Degradation_type=Degradation_type,
         multiple_gpus=False, ema_smoothing=False) # Remember that for sampling we don't care about the ema_smoothing (it is only used for training)
 
-    aggregation_sampling = split_aggregation_sampling(img_lr, patch_size, stride, magnification_factor, diffusion, device)
-    final_pred = aggregation_sampling.aggregation_sampling()
+    aggregation_sampling = split_aggregation_sampling(img_lr, patch_size, stride, magnification_factor, device)
+    final_pred = aggregation_sampling.aggregation_sampling(diffusion)
 
     final_pred = transforms.ToPILImage()(final_pred.squeeze(0).cpu())
     final_pred.save(destination_path)
