@@ -313,6 +313,9 @@ class Diffusion:
             if self.multiple_gpus:
                 train_loader.sampler.set_epoch(epoch) # ensures that the data is shuffled in a consistent manner across multiple epochs (it is useful just for the DistributedSampler)
 
+            b_sz = len(next(iter(train_loader))[0])
+            print(f"\n\n[GPU{self.device}] Epoch {epoch} | Batchsize: {b_sz} | Steps: {len(train_loader)}")
+            
             pbar_train = tqdm(train_loader,desc='Training', position=0)
             if val_loader is not None:
                 pbar_val = tqdm(val_loader,desc='Validation', position=0)
