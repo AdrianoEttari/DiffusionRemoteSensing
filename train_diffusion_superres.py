@@ -387,10 +387,7 @@ class Diffusion:
                         else:
                             predicted_noise = model(x_t, t, lr_img, self.magnification_factor) 
                         
-                        if loss == 'MSE' or loss == 'MAE' or loss == 'Huber' or loss == 'MSE+Perceptual_noise':
-                            val_loss = loss_function(predicted_noise, noise)
-                        else:
-                            raise ValueError('The Loss must be either MSE or MAE or Huber') 
+                        val_loss = loss_function(predicted_noise, noise)
 
                         pbar_val.set_postfix(LOSS=val_loss.item()) # set_postfix just adds a message or value
                         # displayed after the progress bar. In this case the loss of the current batch.
@@ -517,9 +514,8 @@ def launch(args):
     if multiple_gpus:
         print('Using multiple GPUs')
         init_process_group(backend="nccl") # nccl stands for NVIDIA Collective Communication Library. It is used for distributed comunications across multiple GPUs.
-        gpu_id = int(os.environ["LOCAL_RANK"])
-        torch.cuda.set_device(int(gpu_id))
-        device = gpu_id
+        device = int(os.environ["LOCAL_RANK"])
+        torch.cuda.set_device(int(device))
     else:
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         print('Using single GPU')

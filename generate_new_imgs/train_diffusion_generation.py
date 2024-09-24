@@ -295,7 +295,6 @@ class Diffusion:
         else:
             raise ValueError('The Loss must be either MSE or MAE or Huber')
                
-
         if lr_scheduler and lr_scheduler.lower() == 'cosine':
             scheduler = CosineAnnealingWarmupRestarts(
                 optimizer,
@@ -424,7 +423,7 @@ class Diffusion:
 
                 print('Epochs without improving: ', epochs_without_improving)
     
-    def prediction_plot(self, num_classes, model, train_loader, epoch):
+    def prediction_plot(self, num_classes, model, data_loader, epoch):
         if num_classes > 10:
             num_rows_plot = 10
         else:
@@ -433,7 +432,7 @@ class Diffusion:
         fig, axs = plt.subplots(num_rows_plot,5, figsize=(15,15))
 
         for i in range(num_rows_plot):
-            prediction = self.sample(n=5,model=model, target_class=torch.tensor([i], dtype=torch.int64).to(self.device), input_channels=train_loader.dataset[0][0].shape[0], generate_video=False)
+            prediction = self.sample(n=5,model=model, target_class=torch.tensor([i], dtype=torch.int64).to(self.device), input_channels=data_loader.dataset[0][0].shape[0], generate_video=False)
             for j in range(5):
                 axs[i,j].imshow(prediction[j].permute(1,2,0).cpu().numpy())
                 axs[i,j].set_title(f'Class {i}')
@@ -501,9 +500,8 @@ def launch(args):
         print('Using multiple GPUs')
         init_process_group(backend="nccl") # nccl stands for NVIDIA Collective Communication Library. It is used for distributed comunications across multiple GPUs.
         # init_process_group(backend="nccl", world_size=int(os.environ['WORLD_SIZE']), rank=int(os.environ['RANK']))
-        gpu_id = int(os.environ["LOCAL_RANK"])
-        torch.cuda.set_device(int(gpu_id))
-        device = gpu_id
+        device = int(os.environ["LOCAL_RANK"])
+        torch.cuda.set_device(int(device))
     else:
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         print('Using a single GPU')
