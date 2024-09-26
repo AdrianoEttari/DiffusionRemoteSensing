@@ -8,16 +8,16 @@ from utils import get_real_to_model_classes_dict
 
 noise_schedule = 'cosine'
 input_channels = output_channels = 3
-device = 'mps'
+device = 'cuda'
 noise_steps = 1500
 # model_name = 'DiffiT_UNet_generation_TinyImageNet200'
-model_name = 'Residual_Attention_UNet_generation_TinyImageNet200'
+model_name = 'DiffiT_UNet_generation_ImageNet256_small'
 snapshot_path = os.path.join('..', 'models_run', model_name, 'weights', 'snapshot.pt')
 
-image_size = 64
-num_classes = 200
-model = Residual_Attention_UNet_generation(input_channels, output_channels, num_classes, device).to(device)
-# model = Residual_DiffiT_UNet_generation(input_channels, output_channels, num_classes, device).to(device)
+image_size = 256
+num_classes = 85
+# model = Residual_Attention_UNet_generation(input_channels, output_channels, num_classes, device).to(device)
+model = Residual_DiffiT_UNet_generation(input_channels, output_channels, num_classes, device).to(device)
 
 diffusion = Diffusion(
         noise_schedule=noise_schedule, model=model,
