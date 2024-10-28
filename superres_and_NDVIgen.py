@@ -107,7 +107,7 @@ def SAR_to_NDVI_generator(SAR_img_path, device, n_generations=1):
         print(f'Image size: {image_size}, SAR channels: {SAR_channels}, NDVI channels: {NDVI_channels}')
 
         # Preprocessing
-        SAR_img = torch.load(SAR_img_path)
+        SAR_img = torch.load(SAR_img_path, weights_only=True)
         if SAR_img.min() < 0 and SAR_img.min() > -1:
                 SAR_img = (SAR_img + 1) / 2
         elif SAR_img.min() < -1 or SAR_img.max() > 1:
@@ -129,28 +129,28 @@ def plot_SAR_NDVI(SAR_img, NDVI_img, NDVI_pred_img, save_path=None):
     If save_path is not None, the function will save the plot in the specified path.
     '''
     num_pred_imgs = NDVI_pred_img.shape[0]
-    fig, axs = plt.subplots(1, 3 + num_pred_imgs, figsize=(5 * (2 + num_pred_imgs), 10))
-    title_font = {'family': 'sans-serif', 'weight': 'bold', 'size': 8}
+    fig, axs = plt.subplots(1, 3+num_pred_imgs, figsize=(5*num_pred_imgs, 5))
     axs = axs.ravel()
 
+
     axs[0].imshow(SAR_img[0].unsqueeze(0).permute(1, 2, 0).detach().cpu())
-    axs[0].set_title('SAR image 1', fontdict=title_font)
+    axs[0].set_title('SAR image 1')
     axs[0].axis('off')
     
     axs[1].imshow(SAR_img[1].unsqueeze(0).permute(1, 2, 0).detach().cpu())
-    axs[1].set_title('SAR image 2', fontdict=title_font)
+    axs[1].set_title('SAR image 2')
     axs[1].axis('off')
     
     axs[2].imshow(NDVI_img.permute(1, 2, 0).detach().cpu())
-    axs[2].set_title('NDVI image', fontdict=title_font)
+    axs[2].set_title('NDVI image')
     axs[2].axis('off')
-    
+
     for i in range(num_pred_imgs):
         axs[3 + i].imshow(NDVI_pred_img[i].permute(1, 2, 0).detach().cpu())
-        axs[3 + i].set_title(f'NDVI pred {i}', fontdict=title_font)
+        axs[3 + i].set_title(f'NDVI pred {i}')
         axs[3 + i].axis('off')
-    
     plt.show()
+
     if save_path is not None:
         img_to_save = int(input('Which NDVI pred you want to save? (0, 1, 2, ...): '))
         fig, axs = plt.subplots(1, 4, figsize=(5, 10))
@@ -185,31 +185,31 @@ if __name__ == '__main__':
         # plot_lr_sr(lr_img, superres_img, histogram=False, save_path=save_path)
         
         #### SUPER RESOLUTION EXAMPLE ####
-        device = 'mps'
-        img_path = os.path.join('celebA_10k','test_original','017454.jpg')
-        img = Image.open(img_path)
-        img = img.resize((224,224))
-        downsample = transforms.Resize((img.size[0] // 4, img.size[1] // 4),
-                                       interpolation=transforms.InterpolationMode.BICUBIC)
-        img = downsample(img)
+        # device = 'mps'
+        # img_path = os.path.join('celebA_10k','test_original','017454.jpg')
+        # img = Image.open(img_path)
+        # img = img.resize((224,224))
+        # downsample = transforms.Resize((img.size[0] // 4, img.size[1] // 4),
+        #                                interpolation=transforms.InterpolationMode.BICUBIC)
+        # img = downsample(img)
 
-        to_tensor = transforms.ToTensor()
-        lr_img = to_tensor(img).to(device)
+        # to_tensor = transforms.ToTensor()
+        # lr_img = to_tensor(img).to(device)
 
-        model_name = 'Residual_Attention_UNet_superres_magnification4_LRimgsize56_CelebA50k_downblur_NormalizationRRDB'
-        superres_img = super_resolver(lr_img, device, model_name,model='Residual Attention Unet')
-        file_name = os.path.basename(img_path)
-        plot_lr_sr(lr_img, superres_img, histogram=False, save_path=os.path.join('assets', 'Other', 'CelebA_NormalizationRRDB_4x.png'))
+        # model_name = 'Residual_Attention_UNet_superres_magnification4_LRimgsize56_CelebA50k_downblur_NormalizationRRDB'
+        # superres_img = super_resolver(lr_img, device, model_name,model='Residual Attention Unet')
+        # file_name = os.path.basename(img_path)
+        # plot_lr_sr(lr_img, superres_img, histogram=False, save_path=os.path.join('assets', 'Other', 'CelebA_NormalizationRRDB_4x.png'))
 
         #### SAR TO NDVI EXAMPLE ####
-        # device = 'mps'
-        # test_path = os.path.join('imgs_sample', 'test_SAR_TO_NDVI')
-        # list_of_files = ['Victoria_0_20210830_patch_289.pt']
-        # SAR_img_path = os.path.join(test_path, 'sar', list_of_files[0])
-        # SAR_img = torch.load(SAR_img_path)
-        # NDVI_img = torch.load(os.path.join(test_path, 'opt', list_of_files[0]))
+        device = 'mps'
+        test_path = os.path.join('SAR_TO_NDVI_dataset', 'test')
+        list_of_files = ['Victoria_0_20180623_patch_532.pt']
+        SAR_img_path = os.path.join(test_path, 'sar', list_of_files[0])
+        SAR_img = torch.load(SAR_img_path, weights_only=True)
+        NDVI_img = torch.load(os.path.join(test_path, 'opt', list_of_files[0]), weights_only=True)
 
-        # NDVI_pred_img = SAR_to_NDVI_generator(SAR_img_path, device, n_generations=5)
-        # destination_path = 'models_run/Residual_Attention_UNet_EMA_imgsize128_SAR_TO_NDVI/results'
-        # save_path = os.path.join(destination_path, f'{list_of_files[0].replace(".pt", ".png")}')
-        # plot_SAR_NDVI(SAR_img, NDVI_img, NDVI_pred_img, save_path=save_path)
+        NDVI_pred_img = SAR_to_NDVI_generator(SAR_img_path, device, n_generations=5)
+        destination_path = 'models_run/Residual_Attention_UNet_EMA_imgsize128_SAR_TO_NDVI/results'
+        save_path = os.path.join(destination_path, f'{list_of_files[0].replace(".pt", ".png")}')
+        plot_SAR_NDVI(SAR_img, NDVI_img, NDVI_pred_img, save_path=save_path)

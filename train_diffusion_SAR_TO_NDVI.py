@@ -226,12 +226,12 @@ class Diffusion:
             print(self.device)
             print(self.snapshot_path)
 
-            snapshot = torch.load(self.snapshot_path, map_location='cpu')
+            snapshot = torch.load(self.snapshot_path, map_location='cpu', weights_only=True)
             model_state = OrderedDict((key.replace('module.', ''), value) for key, value in snapshot['MODEL_STATE'].items())
             self.model.module.load_state_dict(model_state)
             self.model.module.to(self.device)
         else:
-            snapshot = torch.load(self.snapshot_path, map_location=self.device)
+            snapshot = torch.load(self.snapshot_path, map_location=self.device, weights_only=True)
             self.model.load_state_dict(snapshot["MODEL_STATE"])
             self.epochs_run = snapshot["EPOCHS_RUN"]
 
