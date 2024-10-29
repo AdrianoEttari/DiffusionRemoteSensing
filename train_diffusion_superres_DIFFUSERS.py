@@ -329,7 +329,7 @@ class Diffusion:
                 
                 upsampled_lr_img = F.interpolate(lr_img.to('cpu'), scale_factor=self.magnification_factor, mode='bicubic').to(self.device)
                 model_input = torch.cat((upsampled_lr_img, x_t), dim=1)
-                import ipdb; ipdb.set_trace()
+
                 predicted_noise = model(model_input, t).sample
 
                 train_loss = loss_function(predicted_noise, noise)
