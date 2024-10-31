@@ -174,7 +174,9 @@ class Diffusion:
                 t = (torch.ones(n) * i).long().to(self.device) # tensor of shape (n) with all the elements equal to i.
                 # Basically, each of the n image will be processed with the same integer time step t.
 
-                predicted_noise = model(x, t, lr_img, self.magnification_factor)
+                upsampled_lr_img = F.interpolate(lr_img.to('cpu'), scale_factor=self.magnification_factor, mode='bicubic').to(self.device)
+                model_input = torch.cat((upsampled_lr_img, x), dim=1)
+                predicted_noise = model(model_input, t).sample
 
                 alpha = self.alpha[t][:, None, None, None]
                 alpha_hat = self.alpha_hat[t][:, None, None, None]
@@ -326,10 +328,8 @@ class Diffusion:
 
                 optimizer.zero_grad() # set the gradients to 0
                 
-                
                 upsampled_lr_img = F.interpolate(lr_img.to('cpu'), scale_factor=self.magnification_factor, mode='bicubic').to(self.device)
                 model_input = torch.cat((upsampled_lr_img, x_t), dim=1)
-
                 predicted_noise = model(model_input, t).sample
 
                 train_loss = loss_function(predicted_noise, noise)
