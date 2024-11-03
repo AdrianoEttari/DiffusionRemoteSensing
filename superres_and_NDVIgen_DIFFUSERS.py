@@ -203,9 +203,9 @@ def plot_SAR_NDVI(SAR_img, NDVI_img, NDVI_pred_img, save_path=None):
     
 if __name__ == '__main__':
        #### SUPER RESOLUTION EXAMPLE #####
-        device = 'cuda'
+        device = 'mps'
         # img_path = os.path.join('assets','Other','up42_sample_lr.png')
-        img_path = os.path.join('celebA_100k','test_original','000114.jpg')
+        img_path = os.path.join('celebA_10k','test_original','000114.jpg')
         to_tensor = transforms.ToTensor()
         lr_img = Image.open(img_path)
         transform = transforms.Compose([

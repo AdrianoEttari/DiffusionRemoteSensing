@@ -1,3 +1,4 @@
+#%%
 import os
 from diffusers import StableDiffusionPipeline
 from torch import nn, optim
@@ -7,9 +8,11 @@ import torch
 import numpy as np
 from tqdm import tqdm
 from utils import get_data_superres
+import matplotlib.pyplot as plt
 
 # Save and load paths
 MODEL_SAVE_PATH = os.path.join('models_run', 'VAE_finetining')
+#%%
 
 # Load the Stable Diffusion model with pretrained weights, or load fine-tuned weights if available
 def load_super_res_pipeline(model_path=MODEL_SAVE_PATH):
@@ -83,3 +86,31 @@ magnification_factor = 4
 Blur_radius = 0.5
 image_size = 192
 fine_tuned_pipe = fine_tune_super_resolution(pipe, data_path, magnification_factor, Blur_radius, image_size, epochs=10, batch_size=4, learning_rate=1e-5)
+
+#%%
+def load_fine_tuned_pipeline():
+    # Load the fine-tuned VAE and other pipeline components
+    pipe = StableDiffusionPipeline.from_pretrained(MODEL_SAVE_PATH, torch_dtype=torch.float32)
+    pipe = pipe.to("cuda")
+    return pipe
+
+device='mps'
+lr_image_path = os.path.join('celebA_10k','test_original','000114.jpg')
+lr_image = torch.load(lr_image_path).to(device)
+
+fine_tuned_pipe = load_fine_tuned_pipeline()
+transform_resize = transforms.Resize((48,48), transforms.InterpolationMode.BICUBIC)
+lr_image = transform_resize(lr_image)
+latents = pipe.vae.encode(lr_image).latent_dist.sample()
+sr_images = pipe.vae.decode(latents).sample
+
+fig, axs = plt.subplots(1,2, figsize=(10,5))
+axs = axs.ravel()
+
+axs[0].imshow(lr_image.cpu().numpy().transpose(1,2,0))
+axs[0].set_title("Low Resolution Image")
+axs[0].axis('off')
+axs[1].imshow(sr_images.cpu().numpy().transpose(1,2,0))
+axs[1].set_title("Super Resolution Image")
+axs[1].axis('off')
+plt.show()
