@@ -3,19 +3,18 @@ import os
 from diffusers import StableDiffusionPipeline
 from torch import nn, optim
 from torch.utils.data import DataLoader
-from torchvision import transforms
+from torchvision import transforms, models
 import torch
 import numpy as np
 from tqdm import tqdm
 from utils import get_data_superres
 import matplotlib.pyplot as plt
+from PIL import Image
 
-# Save and load paths
-MODEL_SAVE_PATH = os.path.join('models_run', 'VAE_finetining')
-#%%
+MODEL_SAVE_PATH = os.path.join('models_run', 'VAE_finetuning_PERCEPTUAL')
 
 # Load the Stable Diffusion model with pretrained weights, or load fine-tuned weights if available
-def load_super_res_pipeline(model_path=MODEL_SAVE_PATH):
+def load_super_res_pipeline(model_path=MODEL_SAVE_PATH, device='cuda'):
     if os.path.exists(model_path):
         # Load the fine-tuned weights if available
         print(f"Loading fine-tuned model from {model_path}...")
@@ -25,43 +24,70 @@ def load_super_res_pipeline(model_path=MODEL_SAVE_PATH):
         print("Loading pretrained model...")
         pipe = StableDiffusionPipeline.from_pretrained("CompVis/stable-diffusion-v1-4", torch_dtype=torch.float32)
 
-    pipe = pipe.to("cuda")
+    pipe = pipe.to(device)
     pipe.enable_attention_slicing()
     return pipe
 
-# Fine-tune the model for super-resolution on satellite images
-def fine_tune_super_resolution(pipe, data_path, magnification_factor, Blur_radius, image_size, epochs=5, batch_size=4, learning_rate=1e-5, save_path=MODEL_SAVE_PATH):
-    # Prepare Dataset and Dataloader
+#%% FINE-TUNING
+
+class PerceptualLoss(nn.Module):
+    def __init__(self, feature_layers=[3, 8, 15], device='cuda'):
+        super(PerceptualLoss, self).__init__()
+        vgg = models.vgg16(pretrained=True).features.to(device).eval()
+        self.layers = feature_layers
+        self.vgg = nn.Sequential(*[vgg[i] for i in range(max(feature_layers) + 1)])
+        for param in self.vgg.parameters():
+            param.requires_grad = False
+
+    def forward(self, sr_images, hr_images):
+        sr_images = self._preprocess_for_vgg(sr_images)
+        hr_images = self._preprocess_for_vgg(hr_images)
+        sr_features = self._extract_features(sr_images)
+        hr_features = self._extract_features(hr_images)
+        loss = 0
+        for sr_feat, hr_feat in zip(sr_features, hr_features):
+            loss += nn.functional.mse_loss(sr_feat, hr_feat)
+        return loss
+
+    def _extract_features(self, images):
+        features = []
+        x = images
+        for i, layer in enumerate(self.vgg):
+            x = layer(x)
+            if i in self.layers:
+                features.append(x)
+        return features
+
+    def _preprocess_for_vgg(self, images):
+        # Assumes input images are in range [0, 1]
+        images = (images - torch.tensor([0.485, 0.456, 0.406], device=images.device).view(1, 3, 1, 1)) / torch.tensor([0.229, 0.224, 0.225], device=images.device).view(1, 3, 1, 1)
+        return images
+
+# Fine-tune function with Perceptual Loss
+def fine_tune_super_resolution(pipe, data_path, magnification_factor, Blur_radius, image_size, epochs=5, batch_size=4, learning_rate=1e-5, save_path=MODEL_SAVE_PATH, device='cuda'):
     transform = transforms.Compose([
         transforms.Resize((image_size, image_size)),
     ])
     dataset = get_data_superres(data_path, magnification_factor, Blur_radius, False, 'PIL', transform)
     dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
 
-    # Define optimizer and loss function
-    optimizer = optim.AdamW(pipe.vae.parameters(), lr=learning_rate)
-    loss_fn = nn.MSELoss()  # Mean Squared Error for pixel-wise loss
-
+    optimizer = torch.optim.AdamW(pipe.vae.parameters(), lr=learning_rate)
+    perceptual_loss_fn = PerceptualLoss(device=device)
+    
     pipe.vae.train()
-    print("Num params: ", sum(p.numel() for p in pipe.vae.parameters()))
-    # Training Loop
     for epoch in range(epochs):
         total_loss = 0
         for lr_images, hr_images in tqdm(dataloader):
             transform_resize = transforms.Resize((192,192), transforms.InterpolationMode.BICUBIC)
             lr_images = [transform_resize(img) for img in lr_images]
-            lr_images = torch.stack([torch.tensor(np.array(img)).float()  for img in lr_images]).to("cuda").to(torch.float32)
-            hr_images = torch.stack([torch.tensor(np.array(img)).float()  for img in hr_images]).to("cuda").to(torch.float32)
-            
-            # Encode LR image to latent space using the VAE
+            lr_images = torch.stack([torch.tensor(np.array(img)).float()  for img in lr_images]).to(device).to(torch.float32)
+            hr_images = torch.stack([torch.tensor(np.array(img)).float()  for img in hr_images]).to(device).to(torch.float32)
+
             latents = pipe.vae.encode(lr_images).latent_dist.sample()
-            
-            # Decode to high-res space
             sr_images = pipe.vae.decode(latents).sample
-            loss = loss_fn(sr_images, hr_images)
+            loss = perceptual_loss_fn(sr_images, hr_images)
             total_loss += loss.item()
 
-            # Backpropagation
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
@@ -69,48 +95,65 @@ def fine_tune_super_resolution(pipe, data_path, magnification_factor, Blur_radiu
         avg_loss = total_loss / len(dataloader)
         print(f"Epoch [{epoch+1}/{epochs}], Loss: {avg_loss:.4f}")
 
-    # Save the fine-tuned model
     if not os.path.exists(save_path):
         os.makedirs(save_path)
     pipe.save_pretrained(save_path)
     print(f"Fine-tuned model saved at {save_path}")
 
-    # Set model components back to evaluation mode
     pipe.vae.eval()
     return pipe
 
 # Usage
-pipe = load_super_res_pipeline()
+device = 'cuda'
+pipe = load_super_res_pipeline(device=device)
 data_path = os.path.join('celebA_100k','train_original')
+# data_path = os.path.join('celebA_10k','train_original')
 magnification_factor = 4
 Blur_radius = 0.5
 image_size = 192
-fine_tuned_pipe = fine_tune_super_resolution(pipe, data_path, magnification_factor, Blur_radius, image_size, epochs=10, batch_size=4, learning_rate=1e-5)
+fine_tuned_pipe = fine_tune_super_resolution(pipe, data_path, magnification_factor, Blur_radius, image_size, epochs=10, batch_size=4, learning_rate=1e-5, device=device)
 
-#%%
-def load_fine_tuned_pipeline():
-    # Load the fine-tuned VAE and other pipeline components
-    pipe = StableDiffusionPipeline.from_pretrained(MODEL_SAVE_PATH, torch_dtype=torch.float32)
-    pipe = pipe.to("cuda")
-    return pipe
+#%% TESTING
+def lr_image_preprocessing(image_path, lr_image_size: int, hr_image_size: int):
+    image = Image.open(image_path)
 
-device='mps'
-lr_image_path = os.path.join('celebA_10k','test_original','000114.jpg')
-lr_image = torch.load(lr_image_path).to(device)
+    transform_resize_lr_size = transforms.Resize((lr_image_size,lr_image_size), transforms.InterpolationMode.BICUBIC)
+    transform_resize_hr_size = transforms.Resize((hr_image_size,hr_image_size), transforms.InterpolationMode.BICUBIC)
 
-fine_tuned_pipe = load_fine_tuned_pipeline()
-transform_resize = transforms.Resize((48,48), transforms.InterpolationMode.BICUBIC)
-lr_image = transform_resize(lr_image)
-latents = pipe.vae.encode(lr_image).latent_dist.sample()
-sr_images = pipe.vae.decode(latents).sample
+    image = transforms.ToTensor()(image).unsqueeze(0).to(device)
 
-fig, axs = plt.subplots(1,2, figsize=(10,5))
+    lr_image = transform_resize_hr_size(transform_resize_lr_size(image))
+    return lr_image
+    
+
+device='cuda'
+image_path = os.path.join('celebA_100k','test_original','000114.jpg')
+image = Image.open(image_path)
+image = transforms.ToTensor()(image).unsqueeze(0).to(device)
+hr_image_size = 192
+magnification_factor = 4
+lr_image_size = hr_image_size//magnification_factor
+
+fine_tuned_pipe = load_super_res_pipeline(MODEL_SAVE_PATH,device=device)
+transform_resize_192 = transforms.Resize((hr_image_size,hr_image_size), transforms.InterpolationMode.BICUBIC)
+
+lr_image = lr_image_preprocessing(image_path, lr_image_size, hr_image_size)
+hr_image = transform_resize_192(image)
+
+latents = fine_tuned_pipe.vae.encode(lr_image).latent_dist.sample()
+sr_images = fine_tuned_pipe.vae.decode(latents).sample
+
+fig, axs = plt.subplots(1,3, figsize=(10,5))
 axs = axs.ravel()
 
-axs[0].imshow(lr_image.cpu().numpy().transpose(1,2,0))
+axs[0].imshow(lr_image[0].permute(1,2,0).detach().cpu())
 axs[0].set_title("Low Resolution Image")
 axs[0].axis('off')
-axs[1].imshow(sr_images.cpu().numpy().transpose(1,2,0))
+axs[1].imshow(sr_images[0].permute(1,2,0).detach().cpu())
 axs[1].set_title("Super Resolution Image")
 axs[1].axis('off')
-plt.show()
+axs[2].imshow(hr_image[0].permute(1,2,0).detach().cpu())
+axs[2].set_title("Original Image")
+axs[2].axis('off')
+plt.savefig('Test_VAE_PERCEPTUAL.png')
+# %%
