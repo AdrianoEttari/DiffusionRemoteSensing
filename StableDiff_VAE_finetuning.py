@@ -11,29 +11,26 @@ from utils import get_data_superres
 import matplotlib.pyplot as plt
 from PIL import Image
 
-MODEL_SAVE_PATH = os.path.join('models_run', 'VAE_finetuning_PERCEPTUAL')
+VAE_SAVE_PATH = os.path.join('models_run', 'VAE_finetuning_HR.pt')
 
-# Load the Stable Diffusion model with pretrained weights, or load fine-tuned weights if available
-def load_super_res_pipeline(model_path=MODEL_SAVE_PATH, device='cuda'):
+def load_super_res_VAE(model_path=VAE_SAVE_PATH, device='cuda'):
+    pipe = StableDiffusionPipeline.from_pretrained("CompVis/stable-diffusion-v1-4", torch_dtype=torch.float32)
+    vae = pipe.vae
     if os.path.exists(model_path):
-        # Load the fine-tuned weights if available
         print(f"Loading fine-tuned model from {model_path}...")
-        pipe = StableDiffusionPipeline.from_pretrained(model_path, torch_dtype=torch.float32)
+        vae = vae.load_state_dict(torch.load(model_path))
     else:
-        # Load pretrained Stable Diffusion pipeline
         print("Loading pretrained model...")
-        pipe = StableDiffusionPipeline.from_pretrained("CompVis/stable-diffusion-v1-4", torch_dtype=torch.float32)
 
-    pipe = pipe.to(device)
-    pipe.enable_attention_slicing()
-    return pipe
+    vae = vae.to(device)
+    return vae
 
 #%% FINE-TUNING
 
 class PerceptualLoss(nn.Module):
     def __init__(self, feature_layers=[3, 8, 15], device='cuda'):
         super(PerceptualLoss, self).__init__()
-        vgg = models.vgg16(pretrained=True).features.to(device).eval()
+        vgg = models.vgg16(weights='VGG16_Weights.IMAGENET1K_V1').features.to(device).eval()
         self.layers = feature_layers
         self.vgg = nn.Sequential(*[vgg[i] for i in range(max(feature_layers) + 1)])
         for param in self.vgg.parameters():
@@ -64,28 +61,46 @@ class PerceptualLoss(nn.Module):
         return images
 
 # Fine-tune function with Perceptual Loss
-def fine_tune_super_resolution(pipe, data_path, magnification_factor, Blur_radius, image_size, epochs=5, batch_size=4, learning_rate=1e-5, save_path=MODEL_SAVE_PATH, device='cuda'):
+def fine_tune_super_resolution(vae,
+                                data_path,
+                                magnification_factor,
+                                Blur_radius,
+                                image_size,
+                                epochs=5,
+                                batch_size=4,
+                                learning_rate=1e-5,
+                                save_path=VAE_SAVE_PATH,
+                                device='cuda'):
+
     transform = transforms.Compose([
-        transforms.Resize((image_size, image_size)),
+        transforms.Resize((image_size, image_size),interpolation=transforms.InterpolationMode.BICUBIC),
     ])
+
     dataset = get_data_superres(data_path, magnification_factor, Blur_radius, False, 'PIL', transform)
     dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
 
-    optimizer = torch.optim.AdamW(pipe.vae.parameters(), lr=learning_rate)
+    optimizer = torch.optim.AdamW(vae.parameters(), lr=learning_rate)
     perceptual_loss_fn = PerceptualLoss(device=device)
-    
-    pipe.vae.train()
+    vae.train()
     for epoch in range(epochs):
         total_loss = 0
         for lr_images, hr_images in tqdm(dataloader):
-            transform_resize = transforms.Resize((192,192), transforms.InterpolationMode.BICUBIC)
-            lr_images = [transform_resize(img) for img in lr_images]
-            lr_images = torch.stack([torch.tensor(np.array(img)).float()  for img in lr_images]).to(device).to(torch.float32)
-            hr_images = torch.stack([torch.tensor(np.array(img)).float()  for img in hr_images]).to(device).to(torch.float32)
+            lr_images = [transform(img) for img in lr_images]
+            lr_images = torch.stack([img for img in lr_images]).to(device).to(torch.float32)
+            hr_images = torch.stack([img  for img in hr_images]).to(device).to(torch.float32)
 
-            latents = pipe.vae.encode(lr_images).latent_dist.sample()
-            sr_images = pipe.vae.decode(latents).sample
-            loss = perceptual_loss_fn(sr_images, hr_images)
+            # latents = vae.encode(lr_images).latent_dist.sample()
+            # reconstructed_images = vae.decode(latents).sample
+            # loss = perceptual_loss_fn(reconstructed_images, lr_images)
+
+            latents = vae.encode(hr_images).latent_dist.sample()
+            reconstructed_images = vae.decode(latents).sample
+            loss = perceptual_loss_fn(reconstructed_images, hr_images)
+
+            # latents = vae.encode(lr_images).latent_dist.sample()
+            # reconstructed_images = vae.decode(latents).sample
+            # loss = perceptual_loss_fn(reconstructed_images, hr_images)
+
             total_loss += loss.item()
 
             optimizer.zero_grad()
@@ -97,21 +112,29 @@ def fine_tune_super_resolution(pipe, data_path, magnification_factor, Blur_radiu
 
     if not os.path.exists(save_path):
         os.makedirs(save_path)
-    pipe.save_pretrained(save_path)
+    torch.save(vae.state_dict(), save_path)
     print(f"Fine-tuned model saved at {save_path}")
 
-    pipe.vae.eval()
-    return pipe
+    vae.eval()
+    return vae
 
 # Usage
 device = 'cuda'
-pipe = load_super_res_pipeline(device=device)
+vae = load_super_res_VAE(device=device)
 data_path = os.path.join('celebA_100k','train_original')
 # data_path = os.path.join('celebA_10k','train_original')
 magnification_factor = 4
 Blur_radius = 0.5
 image_size = 192
-fine_tuned_pipe = fine_tune_super_resolution(pipe, data_path, magnification_factor, Blur_radius, image_size, epochs=10, batch_size=4, learning_rate=1e-5, device=device)
+fine_tuned_pipe = fine_tune_super_resolution(vae,
+                                            data_path,
+                                            magnification_factor,
+                                            Blur_radius,
+                                            image_size,
+                                            epochs=10,
+                                            batch_size=4,
+                                            learning_rate=1e-5,
+                                            device=device)
 
 #%% TESTING
 def lr_image_preprocessing(image_path, lr_image_size: int, hr_image_size: int):
@@ -126,22 +149,26 @@ def lr_image_preprocessing(image_path, lr_image_size: int, hr_image_size: int):
     return lr_image
     
 
-device='cuda'
-image_path = os.path.join('celebA_100k','test_original','000114.jpg')
+device='mps'
+# image_path = os.path.join('celebA_100k','test_original','000114.jpg')
+image_path = os.path.join('celebA_10k','test_original','000114.jpg')
 image = Image.open(image_path)
 image = transforms.ToTensor()(image).unsqueeze(0).to(device)
 hr_image_size = 192
 magnification_factor = 4
 lr_image_size = hr_image_size//magnification_factor
 
-fine_tuned_pipe = load_super_res_pipeline(MODEL_SAVE_PATH,device=device)
+fine_tuned_vae = load_super_res_VAE(VAE_SAVE_PATH,device=device)
 transform_resize_192 = transforms.Resize((hr_image_size,hr_image_size), transforms.InterpolationMode.BICUBIC)
 
 lr_image = lr_image_preprocessing(image_path, lr_image_size, hr_image_size)
 hr_image = transform_resize_192(image)
 
-latents = fine_tuned_pipe.vae.encode(lr_image).latent_dist.sample()
-sr_images = fine_tuned_pipe.vae.decode(latents).sample
+# latents = fine_tuned_vae.encode(lr_image).latent_dist.sample()
+latents = fine_tuned_vae.encode(hr_image).latent_dist.sample()
+reconstruction_images = fine_tuned_vae.decode(latents).sample
+
+
 
 fig, axs = plt.subplots(1,3, figsize=(10,5))
 axs = axs.ravel()
@@ -149,11 +176,13 @@ axs = axs.ravel()
 axs[0].imshow(lr_image[0].permute(1,2,0).detach().cpu())
 axs[0].set_title("Low Resolution Image")
 axs[0].axis('off')
-axs[1].imshow(sr_images[0].permute(1,2,0).detach().cpu())
-axs[1].set_title("Super Resolution Image")
+axs[1].imshow(reconstruction_images[0].permute(1,2,0).detach().cpu())
+axs[1].set_title("Reconstruction Image")
 axs[1].axis('off')
 axs[2].imshow(hr_image[0].permute(1,2,0).detach().cpu())
 axs[2].set_title("Original Image")
 axs[2].axis('off')
-plt.savefig('Test_VAE_PERCEPTUAL.png')
+plt.savefig('Reconstruction Image HR.png')
+
+
 # %%
