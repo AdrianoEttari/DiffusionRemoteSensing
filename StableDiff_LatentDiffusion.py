@@ -6,42 +6,100 @@ from torchvision import transforms, models
 import torch
 import numpy as np
 from tqdm import tqdm
-from utils import get_data_superres
+from utils import get_data_superres, get_data_superres_BSRGAN
 import matplotlib.pyplot as plt
 from PIL import Image
 from transformers import ViTModel, ViTFeatureExtractor
+
+
+from torch.nn.parallel import DistributedDataParallel as DDP
+from torch.distributed import init_process_group, destroy_process_group
+from torch.utils.data.distributed import DistributedSampler
+
 
 class LatentDiffusion_superres:
     def __init__(self,
                 VAE_weight_path, 
                 Diffusion_weight_path,
-                device='cuda') -> None:
+                multiple_gpus=False) -> None:
         
         self.VAE_weight_path = VAE_weight_path
         self.Diffusion_weight_path = Diffusion_weight_path
-        self.device = device
+        self.multiple_gpus = multiple_gpus
 
+        if multiple_gpus:
+            print('Using multiple GPUs')
+            init_process_group(backend="nccl") # nccl stands for NVIDIA Collective Communication Library. It is used for distributed comunications across multiple GPUs.
+            self.device = int(os.environ["LOCAL_RANK"])
+            torch.cuda.set_device(int(self.device))
+        else:   
+            self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+            print('Using single GPU')
+    
         model_path = "CompVis/stable-diffusion-v1-4"
         pipe = StableDiffusionPipeline.from_pretrained(model_path).to(self.device)
         self.pipe = pipe
 
         if os.path.exists(self.VAE_weight_path):
             print(f"Loading fine-tuned VAE model from {self.VAE_weight_path}...")
-            self.pipe.vae = self.pipe.vae.load_state_dict(torch.load(self.VAE_weight_path))
+            # snapshot = torch.load(self.VAE_weight_path, map_location=self.device, weights_only=True)
+            # self.pipe.vae.load_state_dict(snapshot)
+            self._load_snapshot(self.VAE_weight_path, self.pipe.vae)
         
         if os.path.exists(self.Diffusion_weight_path):
             print(f"Loading fine-tuned Diffusion model from {self.Diffusion_weight_path}...")
-            self.pipe.unet = pipe.unet.load_state_dict(torch.load(self.Diffusion_weight_path))
-        
+            # snapshot = torch.load(self.Diffusion_weight_path, map_location=self.device, weights_only=True)
+            # self.pipe.unet.load_state_dict(snapshot)
+            self._load_snapshot(self.Diffusion_weight_path, self.pipe.unet)
+    
+    def _load_snapshot(self, snapshot_path, model):
+        '''
+        This function loads the model state and the last epoch of training (so that we can restart the
+        training at this point instead of restarting from 0) from a snapshot.
+        It is a mandatory function in order to be fault tolerant. The reason is that if the training is interrupted, we can resume
+        it from the last snapshot.
+        '''
+        if self.multiple_gpus:
+            from collections import OrderedDict
+
+            snapshot = torch.load(snapshot_path, map_location='cpu', weights_only=True)
+            model_state = OrderedDict((key.replace('module.', ''), value) for key, value in snapshot.items())
+            model.module.load_state_dict(model_state)
+            model.module.to(self.device)
+        else:
+            snapshot = torch.load(snapshot_path, map_location=self.device, weights_only=True)
+            model.load_state_dict(snapshot)
+
+        print(f"Snapshot loaded from {snapshot_path}")
+
+    def _save_snapshot(self, model, snapshot_path):
+        '''
+        This function loads the model state and the current epoch from a snapshot.
+        It is a mandatory function in order to be fault tolerant. The reason is that if the training is interrupted, we can resume
+        it from the last snapshot.
+
+        Input:
+            model: the model to save
+
+        Output:
+            None
+        '''
+        if self.multiple_gpus:
+            snapshot = model.module.state_dict()
+        else:
+            snapshot = model.state_dict()
+        torch.save(snapshot, snapshot_path)
+        print(f"Snapshot saved at {snapshot_path}")
+
     def fine_tuning_VAE(self,
-                        data_path,
-                        magnification_factor,
-                        Blur_radius,
+                        dataloader,
                         image_size,
                         epochs,
-                        batch_size,
                         learning_rate):
-        
+            
+        if self.multiple_gpus:
+            self.pipe.vae = DDP(self.pipe.vae, device_ids=[self.device])
+
         print("Fine-tuning VAE...")
         device = self.device
         vae = self.pipe.vae
@@ -50,9 +108,6 @@ class LatentDiffusion_superres:
         transform = transforms.Compose([
             transforms.Resize((image_size, image_size),interpolation=transforms.InterpolationMode.BICUBIC),
         ])
-
-        dataset = get_data_superres(data_path, magnification_factor, Blur_radius, False, 'PIL', transform)
-        dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
 
         optimizer = torch.optim.AdamW(vae.parameters(), lr=learning_rate)
         perceptual_loss_fn = PerceptualLoss(device=device)
@@ -68,8 +123,12 @@ class LatentDiffusion_superres:
                 # reconstructed_images = vae.decode(latents).sample
                 # loss = perceptual_loss_fn(reconstructed_images, lr_images)
 
-                latents = vae.encode(hr_images).latent_dist.sample()
-                reconstructed_images = vae.decode(latents).sample
+                if self.multiple_gpus:
+                    latents = vae.module.encode(hr_images).latent_dist.sample()
+                    reconstructed_images = vae.module.decode(latents).sample
+                else:
+                    latents = vae.encode(hr_images).latent_dist.sample()
+                    reconstructed_images = vae.decode(latents).sample
                 loss = perceptual_loss_fn(reconstructed_images, hr_images)
 
                 # latents = vae.encode(lr_images).latent_dist.sample()
@@ -81,27 +140,24 @@ class LatentDiffusion_superres:
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
-            
             avg_loss = total_loss / len(dataloader)
             print(f"Epoch [{epoch+1}/{epochs}], Loss: {avg_loss:.4f}")
 
-        if not os.path.exists(save_path):
-            os.makedirs(save_path)
-        torch.save(vae.state_dict(), save_path)
+        self._save_snapshot(vae, save_path)
         print(f"Fine-tuned VAE model saved at {save_path}")
 
         vae.eval()
         return vae
 
     def fine_tuning_Diffusion(self,
-                            data_path,
-                            magnification_factor,
-                            Blur_radius,
+                            dataloader,
                             image_size,
                             epochs,
-                            batch_size,
                             learning_rate):
         
+        if self.multiple_gpus:
+            self.pipe.unet = DDP(self.pipe.unet, device_ids=[self.device])
+
         print("Fine-tuning Diffusion...")
         pipe = self.pipe
         unet = self.pipe.unet
@@ -114,17 +170,9 @@ class LatentDiffusion_superres:
         image_encoder = ViTModel.from_pretrained("google/vit-base-patch16-224-in21k").to(device)
         # feature_extractor = ViTFeatureExtractor.from_pretrained("google/vit-base-patch16-224-in21k")
 
-        transform = transforms.Compose([
-            transforms.Resize((image_size, image_size), interpolation=transforms.InterpolationMode.BICUBIC),
-        ])
-
         # Set loss function and scheduler configuration
         loss_function = torch.nn.MSELoss()
         noise_steps = pipe.scheduler.config.num_train_timesteps
-
-        # Load dataset
-        dataset = get_data_superres(data_path, magnification_factor, Blur_radius, False, 'PIL', transform)
-        dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
 
         # Fine-tuning loop
         unet.train()
@@ -165,9 +213,7 @@ class LatentDiffusion_superres:
             avg_loss = total_loss / len(dataloader)
             print(f"Epoch [{epoch+1}/{epochs}], Loss: {avg_loss:.4f}")
 
-        if not os.path.exists(save_path):
-            os.makedirs(save_path)
-        torch.save(unet.state_dict(), save_path)
+        self._save_snapshot(unet, save_path)
         print(f"Fine-tuned Diffusion model saved at {save_path}")
 
         unet.eval()
@@ -245,33 +291,125 @@ class PerceptualLoss(nn.Module):
         return images
     
 
-if __name__ == "__main__":
-    VAE_weight_path = os.path.join('models_run', 'VAE_finetuning')
-    Diffusion_weight_path = os.path.join('models_run', 'Diffusion_finetuning')
-    device = 'mps'
+def launch(args):
+
+    epochs = args.epochs
+    batch_size = args.batch_size
+    image_size = args.image_size
+    learning_rate = args.lr
+    dataset_path = args.dataset_path
+    magnification_factor = args.magnification_factor
+    Degradation_type = args.Degradation_type
+    multiple_gpus = args.multiple_gpus
+    Blur_radius = args.Blur_radius
+
+    if Blur_radius.lower() != 'random':
+        Blur_radius = float(Blur_radius)
+        print('Using a blur radius of ', Blur_radius)
+    else:
+        print('Using random blur radius from a triangular distribution')
+
+    print(f'Using {Degradation_type} degradation')
+
+    if Degradation_type.lower() == 'downblur':
+        if image_size % magnification_factor != 0:
+            raise ValueError('The image size must be a multiple of the magnification factor')
+        
+        transform = transforms.Compose([
+        transforms.Resize((image_size, image_size)),
+        ]) # The transforms.ToTensor() is in the get_data_superres function (in there
+        # first is applied this transform to y, then the resize according to the magnification_factor
+        # in order to get the x which is the lr_img and finally the to_tensor for both x
+        # and y is applied)
+
+        train_path = f'{dataset_path}/train_original'
+        valid_path = f'{dataset_path}/val_original'
+
+        train_dataset = get_data_superres(train_path, magnification_factor, Blur_radius, False, 'PIL', transform)
+        val_dataset = get_data_superres(valid_path, magnification_factor, Blur_radius, False, 'PIL', transform)
+        
+    elif Degradation_type.lower() == 'bsrgan':
+        num_crops = 1
+
+        train_path = f'{dataset_path}/train_original'
+        valid_path = f'{dataset_path}/val_original'
+
+        train_dataset = get_data_superres_BSRGAN(train_path, magnification_factor, image_size, num_crops=num_crops, degradation_type='BSR_plus', destination_folder=os.path.join(dataset_path+'_Dataset', 'train'))
+        val_dataset = get_data_superres_BSRGAN(valid_path, magnification_factor, image_size, num_crops=num_crops, degradation_type='BSR_plus', destination_folder=os.path.join(dataset_path+'_Dataset', 'val'))
+
+    elif Degradation_type.lower() == 'downblurnoise':
+        train_path = f'{dataset_path}/train_original'
+        valid_path = f'{dataset_path}/val_original'
+
+        transform = transforms.Compose([
+        transforms.Resize((image_size, image_size)),
+        ])
+
+        train_dataset = get_data_superres(train_path, magnification_factor, Blur_radius, True, 'PIL', transform)
+        val_dataset = get_data_superres(valid_path, magnification_factor, Blur_radius, True, 'PIL', transform)
+        # IF YOU WANT TO USE THE get_data BELOW, YOU NEED ALSO TO ADJUST THE STARTING TENSOR IN THE sample FUNCTION
+        # train_dataset = get_data_superres_BSRGAN(train_path, magnification_factor, image_size, num_crops=num_crops, degradation_type='soft_BSR_plus', destination_folder=os.path.join(dataset_path+'_Dataset', 'train'))
+        # val_dataset = get_data_superres_BSRGAN(valid_path, magnification_factor, image_size, num_crops=num_crops, degradation_type='soft_BSR_plus', destination_folder=os.path.join(dataset_path+'_Dataset', 'val'))
+        
+    else:
+        raise ValueError('The degradation type must be either BSRGAN or DownBlur or DownBlurNoise')
+
+    VAE_weight_path = os.path.join('models_run', 'VAE_finetuning.pt')
+    Diffusion_weight_path = os.path.join('models_run', 'Diffusion_finetuning.pt')
     latent_diff_model = LatentDiffusion_superres(VAE_weight_path=VAE_weight_path,
                                                 Diffusion_weight_path=Diffusion_weight_path,
-                                                device=device)
+                                                multiple_gpus=multiple_gpus)
     
-    # data_path = os.path.join('celebA_10k', 'train_original')
-    # magnification_factor = 4
-    # Blur_radius = 0.5
-    # image_size = 192
-    # epochs = 10
-    # batch_size = 4
-    # learning_rate = 1e-5
-    # latent_diff_model.fine_tuning_VAE(data_path=data_path,
-    #                                 magnification_factor=magnification_factor,
-    #                                 Blur_radius=Blur_radius,
-    #                                 image_size=image_size,
-    #                                 epochs=epochs,
-    #                                 batch_size=batch_size,
-    #                                 learning_rate=learning_rate)
-    lr_image = Image.open('celebA_10k/test_original/000100.jpg')
-    lr_image = transforms.ToTensor()(lr_image).unsqueeze(0).to(device)
-    super_res_image = latent_diff_model.sample_superres(lr_image, num_inference_steps=100)
-    plt.imshow(super_res_image.squeeze().permute(1, 2, 0).cpu().numpy())
-    plt.savefig('super_res_image.png')
+    if multiple_gpus:
+        train_loader = DataLoader(dataset=train_dataset, batch_size=batch_size, shuffle=False, sampler=DistributedSampler(train_dataset),drop_last=True)
+        # val_loader = DataLoader(dataset=val_dataset, batch_size=batch_size,shuffle=False, sampler=DistributedSampler(val_dataset),drop_last=True)
+    else:
+        train_loader = DataLoader(dataset=train_dataset, batch_size=batch_size, shuffle=True, drop_last=True)
+        # val_loader = DataLoader(dataset=val_dataset, batch_size=batch_size, shuffle=True, drop_last=True)
+
+    vae = latent_diff_model.fine_tuning_VAE(dataloader=train_loader,
+                                    image_size=image_size,
+                                    epochs=epochs,
+                                    learning_rate=learning_rate)
+    
+    latent_diff_model = LatentDiffusion_superres(VAE_weight_path=VAE_weight_path,
+                                                Diffusion_weight_path=Diffusion_weight_path,
+                                                multiple_gpus=multiple_gpus)
+
+    unet = latent_diff_model.fine_tuning_Diffusion(dataloader=train_loader,
+                                    image_size=image_size,
+                                    epochs=epochs,
+                                    learning_rate=learning_rate)
+
+    if multiple_gpus:
+        destroy_process_group()
+    
+    # lr_image = Image.open('celebA_100k/test_original/000100.jpg')
+    # lr_image = transforms.ToTensor()(lr_image).unsqueeze(0).to(device)
+    # super_res_image = latent_diff_model.sample_superres(lr_image, num_inference_steps=100)
+    # plt.imshow(super_res_image.squeeze().permute(1, 2, 0).cpu().numpy())
+    # plt.savefig('super_res_image.png')
+
+if __name__ == "__main__":
+    import argparse  
+
+    def str2bool(v):
+        """Convert string to boolean."""
+        return v.lower() in ("yes", "true", "t", "1")
+    
+    parser = argparse.ArgumentParser(description=' ')
+    parser.add_argument('--epochs', type=int, default=10)
+    parser.add_argument('--batch_size', type=int, default=8)
+    parser.add_argument('--image_size', type=int)
+    parser.add_argument('--lr', type=float, default=1e-4)
+    parser.add_argument('--dataset_path', type=str, default=None)
+    parser.add_argument('--magnification_factor', type=int)
+    parser.add_argument('--Degradation_type', type=str, default='DownBlur') # 'BSRGAN' or 'DownBlur' or 'DownBlurNoise'
+    parser.add_argument('--multiple_gpus', type=str2bool, nargs='?', const=True, default=False)
+    parser.add_argument('--Blur_radius', type=str, default='0.5')
+    args = parser.parse_args()
+    launch(args)
+
 
     
 
