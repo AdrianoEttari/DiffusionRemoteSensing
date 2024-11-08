@@ -21,25 +21,22 @@ class LatentDiffusion_superres:
     def __init__(self,
                 VAE_weight_path, 
                 Diffusion_weight_path,
+                device,
                 multiple_gpus=False) -> None:
         
         self.VAE_weight_path = VAE_weight_path
         self.Diffusion_weight_path = Diffusion_weight_path
         self.multiple_gpus = multiple_gpus
-
-        if multiple_gpus:
-            print('Using multiple GPUs')
-            init_process_group(backend="nccl") # nccl stands for NVIDIA Collective Communication Library. It is used for distributed comunications across multiple GPUs.
-            self.device = int(os.environ["LOCAL_RANK"])
-            torch.cuda.set_device(int(self.device))
-        else:   
-            self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-            print('Using single GPU')
+        self.device = device
     
         model_path = "CompVis/stable-diffusion-v1-4"
         pipe = StableDiffusionPipeline.from_pretrained(model_path).to(self.device)
         self.pipe = pipe
-
+        
+        if self.multiple_gpus:
+            self.pipe.vae = DDP(self.pipe.vae, device_ids=[self.device])
+            self.pipe.unet = DDP(self.pipe.unet, device_ids=[self.device])
+        
         if os.path.exists(self.VAE_weight_path):
             print(f"Loading fine-tuned VAE model from {self.VAE_weight_path}...")
             # snapshot = torch.load(self.VAE_weight_path, map_location=self.device, weights_only=True)
@@ -96,9 +93,6 @@ class LatentDiffusion_superres:
                         image_size,
                         epochs,
                         learning_rate):
-            
-        if self.multiple_gpus:
-            self.pipe.vae = DDP(self.pipe.vae, device_ids=[self.device])
 
         print("Fine-tuning VAE...")
         device = self.device
@@ -154,9 +148,6 @@ class LatentDiffusion_superres:
                             image_size,
                             epochs,
                             learning_rate):
-        
-        if self.multiple_gpus:
-            self.pipe.unet = DDP(self.pipe.unet, device_ids=[self.device])
 
         print("Fine-tuning Diffusion...")
         pipe = self.pipe
@@ -194,7 +185,10 @@ class LatentDiffusion_superres:
                 conditioning_embedding = image_encoder(lr_image_resized).last_hidden_state.to(device)
 
                 # Step 1: Encode high-resolution image into latent space
-                latent_hr_image = pipe.vae.encode(hr_image).latent_dist.sample() * 0.18215 # 0.18215 (is the std of the prior) is used to scale the latent appropriately in the UNet
+                if self.multiple_gpus:
+                    latent_hr_image = pipe.vae.module.encode(hr_image).latent_dist.sample() * 0.18215
+                else:
+                    latent_hr_image = pipe.vae.encode(hr_image).latent_dist.sample() * 0.18215 # 0.18215 (is the std of the prior) is used to scale the latent appropriately in the UNet
 
                 # Step 2: Add noise to the latent image at the given timestep
                 noise = torch.randn_like(latent_hr_image).to(device)
@@ -310,71 +304,78 @@ def launch(args):
         print('Using random blur radius from a triangular distribution')
 
     print(f'Using {Degradation_type} degradation')
+    
+    if multiple_gpus:
+        print('Using multiple GPUs')
+        init_process_group(backend="nccl") # nccl stands for NVIDIA Collective Communication Library. It is used for distributed comunications across multiple GPUs.
+        device = int(os.environ["LOCAL_RANK"])
+        torch.cuda.set_device(int(device))
+    else:   
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        print('Using single GPU')
+    
+    if dataset_path:
+        if Degradation_type.lower() == 'downblur':
+            if image_size % magnification_factor != 0:
+                raise ValueError('The image size must be a multiple of the magnification factor')
+            
+            transform = transforms.Compose([
+            transforms.Resize((image_size, image_size)),
+            ]) # The transforms.ToTensor() is in the get_data_superres function (in there
+            # first is applied this transform to y, then the resize according to the magnification_factor
+            # in order to get the x which is the lr_img and finally the to_tensor for both x
+            # and y is applied)
 
-    if Degradation_type.lower() == 'downblur':
-        if image_size % magnification_factor != 0:
-            raise ValueError('The image size must be a multiple of the magnification factor')
+            train_path = f'{dataset_path}/train_original'
+            valid_path = f'{dataset_path}/val_original'
+
+            train_dataset = get_data_superres(train_path, magnification_factor, Blur_radius, False, 'PIL', transform)
+            val_dataset = get_data_superres(valid_path, magnification_factor, Blur_radius, False, 'PIL', transform)
+            
+        elif Degradation_type.lower() == 'bsrgan':
+            num_crops = 1
+
+            train_path = f'{dataset_path}/train_original'
+            valid_path = f'{dataset_path}/val_original'
+
+            train_dataset = get_data_superres_BSRGAN(train_path, magnification_factor, image_size, num_crops=num_crops, degradation_type='BSR_plus', destination_folder=os.path.join(dataset_path+'_Dataset', 'train'))
+            val_dataset = get_data_superres_BSRGAN(valid_path, magnification_factor, image_size, num_crops=num_crops, degradation_type='BSR_plus', destination_folder=os.path.join(dataset_path+'_Dataset', 'val'))
+
+        elif Degradation_type.lower() == 'downblurnoise':
+            train_path = f'{dataset_path}/train_original'
+            valid_path = f'{dataset_path}/val_original'
+
+            transform = transforms.Compose([
+            transforms.Resize((image_size, image_size)),
+            ])
+
+            train_dataset = get_data_superres(train_path, magnification_factor, Blur_radius, True, 'PIL', transform)
+            val_dataset = get_data_superres(valid_path, magnification_factor, Blur_radius, True, 'PIL', transform)
+            # IF YOU WANT TO USE THE get_data BELOW, YOU NEED ALSO TO ADJUST THE STARTING TENSOR IN THE sample FUNCTION
+            # train_dataset = get_data_superres_BSRGAN(train_path, magnification_factor, image_size, num_crops=num_crops, degradation_type='soft_BSR_plus', destination_folder=os.path.join(dataset_path+'_Dataset', 'train'))
+            # val_dataset = get_data_superres_BSRGAN(valid_path, magnification_factor, image_size, num_crops=num_crops, degradation_type='soft_BSR_plus', destination_folder=os.path.join(dataset_path+'_Dataset', 'val'))
+            
+        else:
+            raise ValueError('The degradation type must be either BSRGAN or DownBlur or DownBlurNoise')
         
-        transform = transforms.Compose([
-        transforms.Resize((image_size, image_size)),
-        ]) # The transforms.ToTensor() is in the get_data_superres function (in there
-        # first is applied this transform to y, then the resize according to the magnification_factor
-        # in order to get the x which is the lr_img and finally the to_tensor for both x
-        # and y is applied)
-
-        train_path = f'{dataset_path}/train_original'
-        valid_path = f'{dataset_path}/val_original'
-
-        train_dataset = get_data_superres(train_path, magnification_factor, Blur_radius, False, 'PIL', transform)
-        val_dataset = get_data_superres(valid_path, magnification_factor, Blur_radius, False, 'PIL', transform)
-        
-    elif Degradation_type.lower() == 'bsrgan':
-        num_crops = 1
-
-        train_path = f'{dataset_path}/train_original'
-        valid_path = f'{dataset_path}/val_original'
-
-        train_dataset = get_data_superres_BSRGAN(train_path, magnification_factor, image_size, num_crops=num_crops, degradation_type='BSR_plus', destination_folder=os.path.join(dataset_path+'_Dataset', 'train'))
-        val_dataset = get_data_superres_BSRGAN(valid_path, magnification_factor, image_size, num_crops=num_crops, degradation_type='BSR_plus', destination_folder=os.path.join(dataset_path+'_Dataset', 'val'))
-
-    elif Degradation_type.lower() == 'downblurnoise':
-        train_path = f'{dataset_path}/train_original'
-        valid_path = f'{dataset_path}/val_original'
-
-        transform = transforms.Compose([
-        transforms.Resize((image_size, image_size)),
-        ])
-
-        train_dataset = get_data_superres(train_path, magnification_factor, Blur_radius, True, 'PIL', transform)
-        val_dataset = get_data_superres(valid_path, magnification_factor, Blur_radius, True, 'PIL', transform)
-        # IF YOU WANT TO USE THE get_data BELOW, YOU NEED ALSO TO ADJUST THE STARTING TENSOR IN THE sample FUNCTION
-        # train_dataset = get_data_superres_BSRGAN(train_path, magnification_factor, image_size, num_crops=num_crops, degradation_type='soft_BSR_plus', destination_folder=os.path.join(dataset_path+'_Dataset', 'train'))
-        # val_dataset = get_data_superres_BSRGAN(valid_path, magnification_factor, image_size, num_crops=num_crops, degradation_type='soft_BSR_plus', destination_folder=os.path.join(dataset_path+'_Dataset', 'val'))
-        
-    else:
-        raise ValueError('The degradation type must be either BSRGAN or DownBlur or DownBlurNoise')
+        if multiple_gpus:
+            train_loader = DataLoader(dataset=train_dataset, batch_size=batch_size, shuffle=False, sampler=DistributedSampler(train_dataset),drop_last=True)
+            # val_loader = DataLoader(dataset=val_dataset, batch_size=batch_size,shuffle=False, sampler=DistributedSampler(val_dataset),drop_last=True)
+        else:
+            train_loader = DataLoader(dataset=train_dataset, batch_size=batch_size, shuffle=True, drop_last=True)
+            # val_loader = DataLoader(dataset=val_dataset, batch_size=batch_size, shuffle=True, drop_last=True)
 
     VAE_weight_path = os.path.join('models_run', 'VAE_finetuning.pt')
     Diffusion_weight_path = os.path.join('models_run', 'Diffusion_finetuning.pt')
     latent_diff_model = LatentDiffusion_superres(VAE_weight_path=VAE_weight_path,
                                                 Diffusion_weight_path=Diffusion_weight_path,
+                                                device = device,
                                                 multiple_gpus=multiple_gpus)
     
-    if multiple_gpus:
-        train_loader = DataLoader(dataset=train_dataset, batch_size=batch_size, shuffle=False, sampler=DistributedSampler(train_dataset),drop_last=True)
-        # val_loader = DataLoader(dataset=val_dataset, batch_size=batch_size,shuffle=False, sampler=DistributedSampler(val_dataset),drop_last=True)
-    else:
-        train_loader = DataLoader(dataset=train_dataset, batch_size=batch_size, shuffle=True, drop_last=True)
-        # val_loader = DataLoader(dataset=val_dataset, batch_size=batch_size, shuffle=True, drop_last=True)
-
-    vae = latent_diff_model.fine_tuning_VAE(dataloader=train_loader,
-                                    image_size=image_size,
-                                    epochs=epochs,
-                                    learning_rate=learning_rate)
-    
-    latent_diff_model = LatentDiffusion_superres(VAE_weight_path=VAE_weight_path,
-                                                Diffusion_weight_path=Diffusion_weight_path,
-                                                multiple_gpus=multiple_gpus)
+    # vae = latent_diff_model.fine_tuning_VAE(dataloader=train_loader,
+    #                                 image_size=image_size,
+    #                                 epochs=epochs,
+    #                                 learning_rate=learning_rate)
 
     unet = latent_diff_model.fine_tuning_Diffusion(dataloader=train_loader,
                                     image_size=image_size,
@@ -385,7 +386,7 @@ def launch(args):
         destroy_process_group()
     
     # lr_image = Image.open('celebA_100k/test_original/000100.jpg')
-    # lr_image = transforms.ToTensor()(lr_image).unsqueeze(0).to(device)
+    # lr_image = transforms.ToTensor()(lr_image).unsqueeze(0)
     # super_res_image = latent_diff_model.sample_superres(lr_image, num_inference_steps=100)
     # plt.imshow(super_res_image.squeeze().permute(1, 2, 0).cpu().numpy())
     # plt.savefig('super_res_image.png')
