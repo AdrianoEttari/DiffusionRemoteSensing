@@ -104,7 +104,11 @@ class LatentDiffusion_superres:
         ])
 
         optimizer = torch.optim.AdamW(vae.parameters(), lr=learning_rate)
+
         perceptual_loss_fn = PerceptualLoss(device=device)
+        mse_loss_fn = torch.nn.MSELoss()
+        loss_fn = CombinedLoss(perceptual_loss_fn, mse_loss_fn, alpha=0.5, device=device)
+
         vae.train()
         for epoch in range(epochs):
             total_loss = 0
@@ -115,7 +119,7 @@ class LatentDiffusion_superres:
 
                 # latents = vae.encode(lr_images).latent_dist.sample()
                 # reconstructed_images = vae.decode(latents).sample
-                # loss = perceptual_loss_fn(reconstructed_images, lr_images)
+                # loss = loss_fn(reconstructed_images, lr_images)
 
                 if self.multiple_gpus:
                     latents = vae.module.encode(hr_images).latent_dist.sample()
@@ -123,11 +127,11 @@ class LatentDiffusion_superres:
                 else:
                     latents = vae.encode(hr_images).latent_dist.sample()
                     reconstructed_images = vae.decode(latents).sample
-                loss = perceptual_loss_fn(reconstructed_images, hr_images)
+                loss = loss_fn(reconstructed_images, hr_images)
 
                 # latents = vae.encode(lr_images).latent_dist.sample()
                 # reconstructed_images = vae.decode(latents).sample
-                # loss = perceptual_loss_fn(reconstructed_images, hr_images)
+                # loss = loss_fn(reconstructed_images, hr_images)
 
                 total_loss += loss.item()
 
@@ -214,7 +218,6 @@ class LatentDiffusion_superres:
         return unet
 
     def sample_superres(self, lr_image, num_inference_steps,):
-
         self.pipe.unet.eval() 
         self.pipe.vae.eval()
         device = self.device
@@ -245,12 +248,22 @@ class LatentDiffusion_superres:
             # Step 3: Decode latent to image space using the VAE decoder
             generated_image = self.pipe.vae.decode(latent_sample / 0.18215).sample  # Scale by 1/0.18215 as done during training
 
-        # The `generated_image` is now in the range typically [-1, 1] or [0, 1]. You may need to convert it to display/save.
-        generated_image = (generated_image + 1) / 2  # Rescale to [0, 1]
-        # generated_image = generated_image.clamp(0, 1)  # Ensure valid range
-
         return generated_image
 
+class CombinedLoss(nn.Module):
+    def __init__(self, perceptual_loss, mse_loss, alpha=0.5, device='cuda'):
+        super(CombinedLoss, self).__init__()
+        self.perceptual_loss = perceptual_loss
+        self.mse_loss = mse_loss
+        self.alpha = alpha
+        self.device = device
+
+    def forward(self, input, target):
+        perceptual_loss_value = self.perceptual_loss(input, target)
+        mse_loss_value = self.mse_loss(input, target)
+        combined_loss = self.alpha * perceptual_loss_value + (1 - self.alpha) * mse_loss_value
+        return combined_loss
+    
 class PerceptualLoss(nn.Module):
     def __init__(self, feature_layers=[3, 8, 15], device='cuda'):
         super(PerceptualLoss, self).__init__()
@@ -296,7 +309,17 @@ def launch(args):
     Degradation_type = args.Degradation_type
     multiple_gpus = args.multiple_gpus
     Blur_radius = args.Blur_radius
+    vae_snapshot_name = args.vae_snapshot_name
+    diffusion_snapshot_name = args.diffusion_snapshot_name
 
+    if vae_snapshot_name:
+        if not vae_snapshot_name.endswith('.pt'):
+            vae_snapshot_name += '.pt'
+    if diffusion_snapshot_name:
+        if not diffusion_snapshot_name.endswith('.pt'):
+            diffusion_snapshot_name += '.pt'
+
+            
     if Blur_radius.lower() != 'random':
         Blur_radius = float(Blur_radius)
         print('Using a blur radius of ', Blur_radius)
@@ -312,6 +335,7 @@ def launch(args):
         torch.cuda.set_device(int(device))
     else:   
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        # device = 'mps'
         print('Using single GPU')
     
     if dataset_path:
@@ -365,27 +389,27 @@ def launch(args):
             train_loader = DataLoader(dataset=train_dataset, batch_size=batch_size, shuffle=True, drop_last=True)
             # val_loader = DataLoader(dataset=val_dataset, batch_size=batch_size, shuffle=True, drop_last=True)
 
-    VAE_weight_path = os.path.join('models_run', 'VAE_finetuning.pt')
-    Diffusion_weight_path = os.path.join('models_run', 'Diffusion_finetuning.pt')
+    VAE_weight_path = os.path.join('models_run', vae_snapshot_name)
+    Diffusion_weight_path = os.path.join('models_run', diffusion_snapshot_name)
     latent_diff_model = LatentDiffusion_superres(VAE_weight_path=VAE_weight_path,
                                                 Diffusion_weight_path=Diffusion_weight_path,
                                                 device = device,
                                                 multiple_gpus=multiple_gpus)
     
-    # vae = latent_diff_model.fine_tuning_VAE(dataloader=train_loader,
-    #                                 image_size=image_size,
-    #                                 epochs=epochs,
-    #                                 learning_rate=learning_rate)
-
-    unet = latent_diff_model.fine_tuning_Diffusion(dataloader=train_loader,
+    vae = latent_diff_model.fine_tuning_VAE(dataloader=train_loader,
                                     image_size=image_size,
                                     epochs=epochs,
                                     learning_rate=learning_rate)
 
+    # unet = latent_diff_model.fine_tuning_Diffusion(dataloader=train_loader,
+    #                                 image_size=image_size,
+    #                                 epochs=epochs,
+    #                                 learning_rate=learning_rate)
+
     if multiple_gpus:
         destroy_process_group()
     
-    # lr_image = Image.open('celebA_100k/test_original/000100.jpg')
+    # lr_image = Image.open('celebA_10k/test_original/005044.jpg').resize((image_size//magnification_factor, image_size//magnification_factor))
     # lr_image = transforms.ToTensor()(lr_image).unsqueeze(0)
     # super_res_image = latent_diff_model.sample_superres(lr_image, num_inference_steps=100)
     # plt.imshow(super_res_image.squeeze().permute(1, 2, 0).cpu().numpy())
@@ -408,6 +432,8 @@ if __name__ == "__main__":
     parser.add_argument('--Degradation_type', type=str, default='DownBlur') # 'BSRGAN' or 'DownBlur' or 'DownBlurNoise'
     parser.add_argument('--multiple_gpus', type=str2bool, nargs='?', const=True, default=False)
     parser.add_argument('--Blur_radius', type=str, default='0.5')
+    parser.add_argument('--vae_snapshot_name', type=str, default='VAE_finetuning')
+    parser.add_argument('--diffusion_snapshot_name', type=str, default='Diffusion_finetuning')
     args = parser.parse_args()
     launch(args)
 
