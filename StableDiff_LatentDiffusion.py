@@ -109,6 +109,10 @@ class LatentDiffusion_superres:
         mse_loss_fn = torch.nn.MSELoss()
         loss_fn = CombinedLoss(perceptual_loss_fn, mse_loss_fn, alpha=0.5, device=device)
 
+        # loss_fn = PerceptualLoss(device=device)
+
+        # loss_fn = torch.nn.MSELoss()
+
         vae.train()
         for epoch in range(epochs):
             total_loss = 0
@@ -160,27 +164,28 @@ class LatentDiffusion_superres:
         save_path = self.Diffusion_weight_path
         self.pipe.vae.eval()
 
-        optimizer = torch.optim.Adam(unet.parameters(), lr=learning_rate)
 
         image_encoder = ViTModel.from_pretrained("google/vit-base-patch16-224-in21k").to(device)
-        # feature_extractor = ViTFeatureExtractor.from_pretrained("google/vit-base-patch16-224-in21k")
+        # image_encoder.load_state_dict(torch.load(, map_location=device))
 
-        # Set loss function and scheduler configuration
+        # image_encoder.eval()
+        # optimizer = torch.optim.Adam(unet.parameters(), lr=learning_rate)
+
+        unet.eval()
+        optimizer = torch.optim.Adam(image_encoder.parameters(), lr=learning_rate)
+
         loss_function = torch.nn.MSELoss()
         noise_steps = pipe.scheduler.config.num_train_timesteps
 
-        # Fine-tuning loop
-        unet.train()
+        # unet.train()
         for epoch in range(epochs):
             total_loss = 0
             for lr_image, hr_image in tqdm(dataloader):
-                # Move data to device
                 lr_image = lr_image.to(device)
                 hr_image = hr_image.to(device)
 
                 optimizer.zero_grad()
 
-                # Sample a random timestep
                 timestep = torch.randint(low=1, high=noise_steps, size=(1,)).to(device)
 
                 # Resize and condition on low-resolution image embeddings
@@ -211,8 +216,11 @@ class LatentDiffusion_superres:
             avg_loss = total_loss / len(dataloader)
             print(f"Epoch [{epoch+1}/{epochs}], Loss: {avg_loss:.4f}")
 
-        self._save_snapshot(unet, save_path)
-        print(f"Fine-tuned Diffusion model saved at {save_path}")
+        # self._save_snapshot(unet, save_path)
+        # print(f"Fine-tuned Diffusion model saved at {save_path}")
+
+        self._save_snapshot(image_encoder, os.path.join('models_run','ViT_finetuning.pt'))
+        print(f"ViT encoder saved at {os.path.join('models_run','ViT_finetuning.pt')}")
 
         unet.eval()
         return unet
@@ -222,6 +230,7 @@ class LatentDiffusion_superres:
         self.pipe.vae.eval()
         device = self.device
         image_encoder = ViTModel.from_pretrained("google/vit-base-patch16-224-in21k").to(device)
+        image_encoder.eval()
         self.pipe.scheduler.set_timesteps(num_inference_steps) # Set the number of inference steps. Notice that self.pipe.scheduler.timesteps is not from num_inference_steps to 0, but is a random sample of num_inference_steps timesteps from the range [1, self.pipe.scheduler.config.num_train_timesteps]
 
         with torch.no_grad():
@@ -396,24 +405,26 @@ def launch(args):
                                                 device = device,
                                                 multiple_gpus=multiple_gpus)
     
-    vae = latent_diff_model.fine_tuning_VAE(dataloader=train_loader,
-                                    image_size=image_size,
-                                    epochs=epochs,
-                                    learning_rate=learning_rate)
-
-    # unet = latent_diff_model.fine_tuning_Diffusion(dataloader=train_loader,
+    # vae = latent_diff_model.fine_tuning_VAE(dataloader=train_loader,
     #                                 image_size=image_size,
     #                                 epochs=epochs,
     #                                 learning_rate=learning_rate)
 
+    # latent_diff_model.pipe.vae = vae
+
+    unet = latent_diff_model.fine_tuning_Diffusion(dataloader=train_loader,
+                                    image_size=image_size,
+                                    epochs=epochs,
+                                    learning_rate=learning_rate)
+
     if multiple_gpus:
         destroy_process_group()
     
-    # lr_image = Image.open('celebA_10k/test_original/005044.jpg').resize((image_size//magnification_factor, image_size//magnification_factor))
+    # lr_image = Image.open('celebA_10k/test_original/197268.jpg').resize((image_size//magnification_factor, image_size//magnification_factor))
     # lr_image = transforms.ToTensor()(lr_image).unsqueeze(0)
     # super_res_image = latent_diff_model.sample_superres(lr_image, num_inference_steps=100)
     # plt.imshow(super_res_image.squeeze().permute(1, 2, 0).cpu().numpy())
-    # plt.savefig('super_res_image.png')
+    # plt.savefig('super_res_image_MSE_197268.png')
 
 if __name__ == "__main__":
     import argparse  
