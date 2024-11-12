@@ -219,7 +219,9 @@ class LatentDiffusion_superres:
         # self._save_snapshot(unet, save_path)
         # print(f"Fine-tuned Diffusion model saved at {save_path}")
 
-        self._save_snapshot(image_encoder, os.path.join('models_run','ViT_finetuning.pt'))
+        # self._save_snapshot(image_encoder, os.path.join('models_run','ViT_finetuning.pt'))
+        snapshot = image_encoder.state_dict()
+        torch.save(snapshot, os.path.join('models_run','ViT_finetuning.pt'))
         print(f"ViT encoder saved at {os.path.join('models_run','ViT_finetuning.pt')}")
 
         unet.eval()
