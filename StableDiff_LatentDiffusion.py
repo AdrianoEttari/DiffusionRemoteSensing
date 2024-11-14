@@ -166,7 +166,7 @@ class LatentDiffusion_superres:
 
 
         image_encoder = ViTModel.from_pretrained("google/vit-base-patch16-224-in21k").to(device) 
-        image_encoder_snapshot_path = os.path.join('models_run','ViT_finetuning.pt') 
+        # image_encoder_snapshot_path = os.path.join('models_run','ViT_finetuning.pt') 
         # if os.path.exists(image_encoder_snapshot_path): ############## TO PERFORM FINETUNING OF THE ViT ENCODER OF THE LOW RESOLUTION IMAGE
         #     print(f"Loading fine-tuned ViT model from {image_encoder_snapshot_path}...") ############## TO PERFORM FINETUNING OF THE ViT ENCODER OF THE LOW RESOLUTION IMAGE
         #     image_encoder.load_state_dict(torch.load(image_encoder_snapshot_path, map_location=device)) ############## TO PERFORM FINETUNING OF THE ViT ENCODER OF THE LOW RESOLUTION IMAGE
@@ -180,7 +180,7 @@ class LatentDiffusion_superres:
         loss_function = torch.nn.MSELoss()
         noise_steps = pipe.scheduler.config.num_train_timesteps
 
-        # unet.train()
+        unet.train()
         for epoch in range(epochs):
             total_loss = 0
             for lr_image, hr_image in tqdm(dataloader):
