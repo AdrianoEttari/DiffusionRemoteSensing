@@ -247,17 +247,17 @@ class LatentDiffusion_superres:
             latent_shape = (1, 4, 24, 24)  # CHANGE ACCORDING TO YOUR LATENT SPACE DIMENSIONS
             latent_sample = torch.randn(latent_shape).to(device)
 
-            # Step 2: Perform iterative denoising
+            # Optionally, provide conditioning embeddings if needed
+            transform_resize_224 = transforms.Resize((224, 224), transforms.InterpolationMode.BICUBIC)
+            lr_image_resized = transform_resize_224(lr_image.to("cpu")).to(device)
+            conditioning_embedding = image_encoder(lr_image_resized).last_hidden_state.to(device)
 
+            # Step 2: Perform iterative denoising
             for timestep in tqdm(self.pipe.scheduler.timesteps):
                 timestep = timestep.to(device)
 
                 # Compute noise prediction
                 with torch.no_grad():
-                    # Optionally, provide conditioning embeddings if needed
-                    transform_resize_224 = transforms.Resize((224, 224), transforms.InterpolationMode.BICUBIC)
-                    lr_image_resized = transform_resize_224(lr_image.to("cpu")).to(device)
-                    conditioning_embedding = image_encoder(lr_image_resized).last_hidden_state.to(device)
                     noise_pred = self.pipe.unet(latent_sample, timestep, conditioning_embedding).sample
                 # Update latent sample with the scheduler step
                 latent_sample = self.pipe.scheduler.step(noise_pred, timestep, latent_sample).prev_sample # The scheduler’s step() method takes the noisy residual, timestep, and input and it predicts the image at the previous timestep
