@@ -176,6 +176,7 @@ ImageNet256/
 ImageNet256_small/
 geojson_files/
 models_run/
+landsat_sentinel_superres/
 
 # Files
 .DS_Store
