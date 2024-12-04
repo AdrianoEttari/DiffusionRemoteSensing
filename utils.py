@@ -257,6 +257,29 @@ class get_data_superres_BSRGAN(Dataset):
 
         return x, y
     
+class get_data_superres_REAL_DATA(Dataset):
+    def __init__(self, root_dir):
+        self.root_dir = root_dir
+        self.landsat_folder = os.path.join(root_dir, 'landsat')
+        self.sentinel_folder = os.path.join(root_dir, 'sentinel')
+        self.filenames = sorted(os.listdir(self.landsat_folder)) # sentinel and landsat filenames are the same
+
+    def __len__(self):
+        len(self.filenames)
+
+    def __getitem__(self, idx):
+        landsat_img_path = os.path.join(self.landsat_folder, self.filenames[idx])
+        sentinel_img_path = os.path.join(self.sentinel_folder, self.filenames[idx])
+
+        landsat_img = Image.open(landsat_img_path)
+        sentinel_img = Image.open(sentinel_img_path)
+
+        transform = transforms.ToTensor()
+        landsat_img = transform(landsat_img)
+        sentinel_img = transform(sentinel_img)
+
+        return landsat_img, sentinel_img
+
 class data_organizer_superresolution():
     '''
     This class allows to organize the data inside main_folder (provided in the __init__) 

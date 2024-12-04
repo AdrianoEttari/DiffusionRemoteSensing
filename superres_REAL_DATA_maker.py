@@ -1,22 +1,22 @@
-#%%
+#%% IMPORT LIBRARIES
 import numpy as np
 from tqdm import tqdm
 import rasterio
 import os
 from rasterio.windows import Window
 from PIL import Image
-#%%
+
+#%% BUILD A DICTIONARY WITH THE BANDS NAMES AND THEIR INDEXES. AND BUILD A LIST WITH ALL THE IMAGES NAMES
 img_folder = os.path.curdir
 
 folder_output_path = os.path.join('landsat_sentinel_superres')
 os.makedirs(os.path.join(folder_output_path, 'sentinel'), exist_ok=True)
 os.makedirs(os.path.join(folder_output_path, 'landsat'), exist_ok=True)
 
-sentinel_name_list = ['Brindisi_sentinel.tif', 'Sicilia_centro_sentinel.tif', 'Trento_Bolzano_sentinel.tif']
-landsat_name_list = ['Brindisi_landsat.tif', 'Sicilia_centro_landsat.tif', 'Trento_Bolzano_landsat.tif']
+sentinel_name_list = ['Napoli_sentinel.tif']
+landsat_name_list = ['Napoli_landsat.tif']
 
 band_name2index = {}
-
 
 if len(landsat_name_list)>0:
     with rasterio.open(os.path.join(img_folder, landsat_name_list[0])) as src:
@@ -34,7 +34,9 @@ if len(sentinel_name_list)>0:
 
 images_name_list = sentinel_name_list + landsat_name_list
 print('Satellite images bands: ', band_name2index)
-#%%
+
+#%% FUNCTION TO PROCESS THE IMAGES IN CHUNKS
+
 def process_image_in_chunks(img_path, chunk_size):
     with rasterio.open(img_path) as src:
         height, width = src.height, src.width
@@ -74,7 +76,7 @@ def process_image_in_chunks(img_path, chunk_size):
                 rgbnir_full[y:y + window.height, x:x + window.width, :] = rgbnir_uint8_chunk
 
     return rgbnir_full
-#%%
+#%% EXECUTE THE FUNCTION FOR EACH IMAGE AND SAVE THE FINAL IMAGE
 images_name_list_filtered = images_name_list[:]
 chunk_size = 5000
 
@@ -91,22 +93,94 @@ for img_name in tqdm(images_name_list_filtered):
     elif 'landsat' in img_name:
         image.save(os.path.join(folder_output_path, 'landsat', img_name.split('_')[0]+'.png'))
 
-# %%
+# %% PATCHIFICATION OF THE IMAGES
 from PIL import Image
 import numpy as np
 import os
 from Aggregation_Sampling import split_aggregation_sampling
 from torchvision import transforms
+from tqdm import tqdm
 
-sentinel_napoli = 'landsat_sentinel_superres/sentinel/Sfax.png'
-transforms = transforms.ToTensor()
-img_lr = transforms(np.array(Image.open(sentinel_napoli))).unsqueeze(0)
+full_imgs_folder_path = 'landsat_sentinel_superres'
+patches_folder_path = 'landsat_sentinel_superres_patches'
+os.makedirs(os.path.join(patches_folder_path, 'landsat'), exist_ok=True)
+os.makedirs(os.path.join(patches_folder_path, 'sentinel'), exist_ok=True)
 
-patch_size = 256
-stride = 256
-magnification_factor = 1
-device = 'cpu'
+for img_name in tqdm(os.listdir(os.path.join(full_imgs_folder_path, 'landsat'))):
+    landsat_img_path = os.path.join(full_imgs_folder_path, 'landsat', img_name)
+    sentinel_img_path = os.path.join(full_imgs_folder_path, 'sentinel', img_name)
+    landsat_img = Image.open(landsat_img_path)
+    sentinel_img = Image.open(sentinel_img_path)
 
-patchifier = split_aggregation_sampling(img_lr, patch_size, stride, magnification_factor, device)
-print(len(patchifier.patches_lr))
+    if sentinel_img.size[0] > landsat_img.size[0]*2 and sentinel_img.size[0] < landsat_img.size[0]*4 and sentinel_img.size[1] > landsat_img.size[1]*2 and sentinel_img.size[1] < landsat_img.size[1]*4:
+        landsat_img = landsat_img.resize((sentinel_img.size[0], sentinel_img.size[1]), Image.BICUBIC)
+    else:
+        raise ValueError('The size of the images is not correct')
+
+    transform = transforms.ToTensor()
+    landsat_img = transform(np.array(landsat_img)).unsqueeze(0)
+    sentinel_img = transform(np.array(sentinel_img)).unsqueeze(0)
+    
+    patch_size = 256
+    stride = 256
+    magnification_factor = 1
+    device = 'cpu'
+    patchifier_landsat = split_aggregation_sampling(landsat_img, patch_size, stride, magnification_factor, device)
+    patchifier_sentinel = split_aggregation_sampling(sentinel_img, patch_size, stride, magnification_factor, device)
+
+    for i in range(len(patchifier_landsat.patches_lr)):
+        patch_landsat = patchifier_landsat.patches_lr[0].squeeze(0)
+        patch_sentinel = patchifier_sentinel.patches_lr[0].squeeze(0)
+        # WRITE A CODE THAT CHECKS IF THERE ARE NAN VALUES IN THE PATCHES. EVEN IF THERE IS JUST ONE NAN VALUE, BOTH THE PATCHES WILL NOT BE SAVED
+        patch_landsat = Image.fromarray((patch_landsat.permute(1,2,0).cpu().numpy()*255).astype(np.uint8))
+        patch_landsat.save(os.path.join(patches_folder_path, 'landsat', img_name.split('.')[0] + '_patch_' + str(i) + '.png'))
+        patch_sentinel = Image.fromarray((patch_sentinel.permute(1,2,0).cpu().numpy()*255).astype(np.uint8))
+        patch_sentinel.save(os.path.join(patches_folder_path, 'sentinel', img_name.split('.')[0] + '_patch_' + str(i) + '.png'))
+
+        
+
+
+# %% TO REMOVE (BUILD DATASET AND CHECK ONE IMAGE BAND)
+from utils import get_data_superres_REAL_DATA
+import matplotlib.pyplot as plt
+
+dataset = get_data_superres_REAL_DATA('landsat_sentinel_superres_patches')
+
+for i in range(10):
+    fig, axs = plt.subplots(1,2)
+    axs = axs.ravel()
+    axs[0].imshow(dataset[i][0].permute(1,2,0)[:,:,0], cmap='gray')
+    axs[0].set_title('Landsat')
+    axs[1].imshow(dataset[i][1].permute(1,2,0)[:,:,0], cmap='gray')
+    axs[1].set_title('Sentinel')
+    plt.show()
+
+# %% TO REMOVE (CHECK ALL THE BANDS OF BOTH LANDSAT AND SENTINEL FOR EACH IMAGE)
+transform = transforms.ToTensor()
+
+for patch in os.listdir(os.path.join(patches_folder_path, 'landsat')):
+    fig, axs = plt.subplots(2,4)
+
+    landsat_img = np.array(Image.open(os.path.join(patches_folder_path, 'landsat', patch)))
+    landsat_img = transform(landsat_img)
+
+    sentinel_img = np.array(Image.open(os.path.join(patches_folder_path, 'sentinel', patch)))
+    sentinel_img = transform(sentinel_img)
+
+    print(patch)
+    for j in range(4):
+        axs[0,j].imshow(landsat_img.permute(1,2,0)[:,:,j], cmap='gray')
+        axs[0,j].set_title('Landsat band ' + str(j+1))
+        axs[0,j].axis('off')
+        axs[1,j].imshow(sentinel_img.permute(1,2,0)[:,:,j], cmap='gray')
+        axs[1,j].set_title('Sentinel band ' + str(j+1))
+        axs[1,j].axis('off')
+    plt.show()
+
+    _input = input('Press c to continue')
+    if _input == 'c':
+        continue
+    else:
+        break
+
 # %%
