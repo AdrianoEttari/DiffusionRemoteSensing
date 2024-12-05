@@ -35,13 +35,34 @@ if len(sentinel_name_list)>0:
 images_name_list = sentinel_name_list + landsat_name_list
 print('Satellite images bands: ', band_name2index)
 
+#%% PREPROCESSING OF THE IMAGES
+def SCL_mask_maker(tif_image_path, band_name2index):
+    tif_image = rasterio.open(tif_image_path)
+    SCL = tif_image.read(band_name2index['SCL'])
+    SCL = np.round(SCL * 10000).astype(int)
+    SCL = SCL.astype(np.uint16)
+    not_valid_classes = [0,1,3,6,7,8,9,10]
+    mask = np.isin(SCL, not_valid_classes)
+    return mask
+
+def landsat_mask_maker(tif_image_path):
+    tif_image = rasterio.open(tif_image_path)
+    tif_image = tif_image.read(1)
+    mask = np.isnan(tif_image)
+    return mask
 #%% FUNCTION TO PROCESS THE IMAGES IN CHUNKS
 
-def process_image_in_chunks(img_path, chunk_size):
+def process_image_in_chunks(img_path, chunk_size, band_name2index):
     with rasterio.open(img_path) as src:
         height, width = src.height, src.width
         profile = src.profile
-
+        
+        if 'sentinel' in img_path:
+            scl_mask = SCL_mask_maker(img_path, band_name2index)
+            landsat_mask = None
+        elif 'landsat' in img_path:
+            landsat_mask = landsat_mask_maker(img_path)
+            scl_mask = None
         # Initialize an empty array for the full RGB image
         rgbnir_full = np.zeros((height, width, 4), dtype=np.uint8)
 
@@ -75,18 +96,22 @@ def process_image_in_chunks(img_path, chunk_size):
                 # Place chunk into the final image array
                 rgbnir_full[y:y + window.height, x:x + window.width, :] = rgbnir_uint8_chunk
 
-    return rgbnir_full
+    return rgbnir_full, scl_mask, landsat_mask
 #%% EXECUTE THE FUNCTION FOR EACH IMAGE AND SAVE THE FINAL IMAGE
 images_name_list_filtered = images_name_list[:]
 chunk_size = 5000
-
+scl_masks = {}
+landsat_masks = {}
 for img_name in tqdm(images_name_list_filtered):
     img_path = os.path.join(img_folder, img_name)
     # Process and construct the full image
-    rgb_full = process_image_in_chunks(img_path, chunk_size)
-
+    rgbnir_full, scl_mask, landsat_mask = process_image_in_chunks(img_path, chunk_size, band_name2index)
+    if scl_mask is not None:
+        scl_masks[img_name] = scl_mask
+    if landsat_mask is not None:
+        landsat_masks[img_name] = landsat_mask
     # Convert the final image array to a PIL Image and save as PNG in the correct folder
-    image = Image.fromarray(rgb_full)
+    image = Image.fromarray(rgbnir_full)
     img_name, ext = os.path.splitext(img_name)
     if 'sentinel' in img_name:
         image.save(os.path.join(folder_output_path, 'sentinel', img_name.split('_')[0]+'.png'))
@@ -100,13 +125,15 @@ import os
 from Aggregation_Sampling import split_aggregation_sampling
 from torchvision import transforms
 from tqdm import tqdm
+import cv2
 
 full_imgs_folder_path = 'landsat_sentinel_superres'
 patches_folder_path = 'landsat_sentinel_superres_patches'
 os.makedirs(os.path.join(patches_folder_path, 'landsat'), exist_ok=True)
 os.makedirs(os.path.join(patches_folder_path, 'sentinel'), exist_ok=True)
 
-for img_name in tqdm(os.listdir(os.path.join(full_imgs_folder_path, 'landsat'))):
+discarded = 0
+for img_name in tqdm(os.listdir(os.path.join(full_imgs_folder_path, 'sentinel'))):
     landsat_img_path = os.path.join(full_imgs_folder_path, 'landsat', img_name)
     sentinel_img_path = os.path.join(full_imgs_folder_path, 'sentinel', img_name)
     landsat_img = Image.open(landsat_img_path)
@@ -118,9 +145,20 @@ for img_name in tqdm(os.listdir(os.path.join(full_imgs_folder_path, 'landsat')))
         raise ValueError('The size of the images is not correct')
 
     transform = transforms.ToTensor()
-    landsat_img = transform(np.array(landsat_img)).unsqueeze(0)
-    sentinel_img = transform(np.array(sentinel_img)).unsqueeze(0)
+
+    sentinel_img = np.array(sentinel_img)
+    scl_mask = scl_masks[img_name.replace('.png', '_sentinel.tif')][..., None]
+    sentinel_img = np.concatenate((sentinel_img, scl_mask), axis=2)
+    sentinel_img = transform(sentinel_img).unsqueeze(0)
     
+    landsat_img = np.array(landsat_img)
+    landsat_mask = landsat_masks[img_name.replace('.png', '_landsat.tif')][..., None]
+    target_size = (landsat_img.shape[1], landsat_img.shape[0])
+    landsat_mask = landsat_mask.astype(np.uint8)
+    landsat_mask = cv2.resize(landsat_mask, target_size, interpolation=cv2.INTER_NEAREST)[..., None]
+    landsat_img = np.concatenate((landsat_img, landsat_mask), axis=2)
+    landsat_img = transform(landsat_img).unsqueeze(0)
+
     patch_size = 256
     stride = 256
     magnification_factor = 1
@@ -128,14 +166,19 @@ for img_name in tqdm(os.listdir(os.path.join(full_imgs_folder_path, 'landsat')))
     patchifier_landsat = split_aggregation_sampling(landsat_img, patch_size, stride, magnification_factor, device)
     patchifier_sentinel = split_aggregation_sampling(sentinel_img, patch_size, stride, magnification_factor, device)
 
-    for i in range(len(patchifier_landsat.patches_lr)):
-        patch_landsat = patchifier_landsat.patches_lr[0].squeeze(0)
-        patch_sentinel = patchifier_sentinel.patches_lr[0].squeeze(0)
-        # WRITE A CODE THAT CHECKS IF THERE ARE NAN VALUES IN THE PATCHES. EVEN IF THERE IS JUST ONE NAN VALUE, BOTH THE PATCHES WILL NOT BE SAVED
-        patch_landsat = Image.fromarray((patch_landsat.permute(1,2,0).cpu().numpy()*255).astype(np.uint8))
-        patch_landsat.save(os.path.join(patches_folder_path, 'landsat', img_name.split('.')[0] + '_patch_' + str(i) + '.png'))
-        patch_sentinel = Image.fromarray((patch_sentinel.permute(1,2,0).cpu().numpy()*255).astype(np.uint8))
-        patch_sentinel.save(os.path.join(patches_folder_path, 'sentinel', img_name.split('.')[0] + '_patch_' + str(i) + '.png'))
+    for i in range(len(patchifier_sentinel.patches_lr)):
+        patch_landsat = patchifier_landsat.patches_lr[i].squeeze(0)
+        patch_sentinel = patchifier_sentinel.patches_lr[i].squeeze(0)
+        scl_patch_mask = patchifier_sentinel.patches_lr[i][0].permute(1,2,0)[:,:,4]
+        landsat_patch_mask = patchifier_landsat.patches_lr[i][0].permute(1,2,0)[:,:,4]
+
+        if scl_patch_mask.sum() == 0 and landsat_patch_mask.sum() == 0:
+            patch_landsat = Image.fromarray((patch_landsat.permute(1,2,0)[:,:,:3].cpu().numpy()*255).astype(np.uint8))
+            patch_landsat.save(os.path.join(patches_folder_path, 'landsat', img_name.split('.')[0] + '_patch_' + str(i) + '.png'))
+            patch_sentinel = Image.fromarray((patch_sentinel.permute(1,2,0)[:,:,:3].cpu().numpy()*255).astype(np.uint8))
+            patch_sentinel.save(os.path.join(patches_folder_path, 'sentinel', img_name.split('.')[0] + '_patch_' + str(i) + '.png'))
+        else:
+            discarded+=1
 
         
 
