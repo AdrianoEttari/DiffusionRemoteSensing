@@ -14,7 +14,7 @@ os.makedirs(os.path.join(folder_output_path, 'sentinel'), exist_ok=True)
 os.makedirs(os.path.join(folder_output_path, 'landsat'), exist_ok=True)
 
 sentinel_name_list = ['Napoli_sentinel.tif']
-landsat_name_list = ['Napoli_landsat.tif']
+landsat_name_list = []
 
 band_name2index = {}
 
