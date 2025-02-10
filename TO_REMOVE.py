@@ -107,4 +107,51 @@ axs[1].set_title('High Resolution Image')
 axs[2].imshow(reconstructed[0].permute(1, 2, 0).cpu().detach().numpy())
 axs[2].set_title('Reconstructed Image')
 plt.show()
+#%% USING A PRETRAINED SUPER-RESOLUTION MODEL (chatgpt)
+import torch
+from diffusers import StableDiffusionUpscalePipeline
+from PIL import Image
 
+# Load the pretrained x4 upscaling model
+model_id = "stabilityai/stable-diffusion-x4-upscaler"
+pipe = StableDiffusionUpscalePipeline.from_pretrained(model_id, torch_dtype=torch.float16)
+pipe = pipe.to("cuda")  # Move to GPU
+
+img_path = r'up42_sentinel2_patches\test_original\patch_0_4864.png'
+lr_img = Image.open(img_path).resize((128, 128))
+
+# Perform super-resolution
+prompt = "a detailed, high-resolution image"
+upscaled_image = pipe(prompt=prompt, image=lr_img).images[0]
+
+upscaled_image.show()
+
+#%% USING CONTROLNET FOR SUPER-RESOLUTION (chatgpt)
+# pip install torch torchvision diffusers transformers accelerate
+import torch
+from diffusers import StableDiffusionControlNetPipeline, ControlNetModel, UniPCMultistepScheduler
+from PIL import Image
+import numpy as np
+
+# Load a ControlNet model trained for super-resolution
+controlnet = ControlNetModel.from_pretrained("lllyasviel/super-resolution-controlnet", torch_dtype=torch.float16)
+pipe = StableDiffusionControlNetPipeline.from_pretrained(
+    "runwayml/stable-diffusion-v1-5",
+    controlnet=controlnet,
+    torch_dtype=torch.float16
+)
+
+pipe.scheduler = UniPCMultistepScheduler.from_config(pipe.scheduler.config)
+pipe = pipe.to("cuda")
+
+# Load and preprocess the LR image
+lr_image = Image.open("low_res_image.png").convert("RGB")
+lr_image = lr_image.resize((256, 256))  # Resize if needed
+lr_tensor = torch.tensor(np.array(lr_image) / 255.0).permute(2, 0, 1).unsqueeze(0).to("cuda", dtype=torch.float16)
+
+# Generate the high-resolution image
+upscaled_image = pipe(prompt="", image=lr_tensor, num_inference_steps=30).images[0]
+
+# Save or display the output
+# upscaled_image.save("upscaled_controlnet.png")
+upscaled_image.show()
