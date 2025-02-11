@@ -2,7 +2,7 @@ import os
 import matplotlib.pyplot as plt
 import torch
 import torch.nn as nn
-import torchvision.transforms as transforms
+from torchvision import transforms, models
 from tqdm import tqdm
 from torch.utils.data import DataLoader
 from utils import get_data_superres, get_data_superres_BSRGAN, video_maker, CosineAnnealingWarmupRestarts
@@ -16,13 +16,17 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.distributed import init_process_group, destroy_process_group
 from torch.utils.data.distributed import DistributedSampler
 
-    
+from diffusers import StableDiffusionPipeline
+
 class Diffusion:
     def __init__(
             self,
             noise_schedule: str,
             model: nn.Module,
+            vae_model: nn.Module,
             snapshot_path: str,
+            VAE_weight_path_LR: str,
+            VAE_weight_path_HR: str,
             noise_steps=1000,
             beta_start=1e-4,
             beta_end=0.02,
@@ -35,6 +39,7 @@ class Diffusion:
             ema_smoothing=False
             ):
 
+
         self.noise_steps = noise_steps
         self.beta_start = beta_start
         self.beta_end = beta_end
@@ -42,17 +47,33 @@ class Diffusion:
         self.model_name = model_name
         self.magnification_factor = magnification_factor
         self.device = device
+        self.multiple_gpus = multiple_gpus
+
+        self.VAE_weight_path_LR = VAE_weight_path_LR
+        self.VAE_weight_path_HR = VAE_weight_path_HR
+
         self.snapshot_path = snapshot_path
         self.Degradation_type=Degradation_type
-        self.multiple_gpus = multiple_gpus
+        
         self.ema_smoothing = ema_smoothing
         self.model = model.to(self.device)
+
+        self.vae_model_LR = vae_model.to(self.device)
+        self.vae_model_HR = vae_model.to(self.device)
         # epoch_run is used by _save_snapshot and _load_snapshot to keep track of the current epoch
         self.epochs_run = 0
         # If a snapshot exists, we load it
         if os.path.exists(snapshot_path):
             print("Loading snapshot")
             self._load_snapshot()
+
+        if os.path.exists(self.VAE_weight_path_LR):
+            print(f"Loading fine-tuned VAE model LR from {self.VAE_weight_path_LR}...")
+            self._load_snapshot_VAE(self.VAE_weight_path_LR, self.vae_model_LR)
+
+        if os.path.exists(self.VAE_weight_path_HR):
+            print(f"Loading fine-tuned VAE model HR from {self.VAE_weight_path_HR}...")
+            self._load_snapshot_VAE(self.VAE_weight_path_HR, self.vae_model_HR)
 
         self.noise_schedule = noise_schedule
 
@@ -226,6 +247,25 @@ class Diffusion:
         torch.save(snapshot, self.snapshot_path)
         print(f"Epoch {epoch} | Training snapshot saved at {self.snapshot_path}")
 
+    def _save_snapshot_VAE(self, model, snapshot_path):
+        '''
+        This function loads the model state and the current epoch from a snapshot.
+        It is a mandatory function in order to be fault tolerant. The reason is that if the training is interrupted, we can resume
+        it from the last snapshot.
+
+        Input:
+            model: the model to save
+
+        Output:
+            None
+        '''
+        if self.multiple_gpus:
+            snapshot = model.module.state_dict()
+        else:
+            snapshot = model.state_dict()
+        torch.save(snapshot, snapshot_path)
+        print(f"Snapshot saved at {snapshot_path}")
+
     def _load_snapshot(self):
         '''
         This function loads the model state and the last epoch of training (so that we can restart the
@@ -250,6 +290,26 @@ class Diffusion:
         # print(f"Resuming training from snapshot at Epoch {self.epochs_run}")
         print(f"Snapshot loaded from {self.snapshot_path}")
 
+    def _load_snapshot_VAE(self, snapshot_path, model):
+        '''
+        This function loads the model state and the last epoch of training (so that we can restart the
+        training at this point instead of restarting from 0) from a snapshot.
+        It is a mandatory function in order to be fault tolerant. The reason is that if the training is interrupted, we can resume
+        it from the last snapshot.
+        '''
+        if self.multiple_gpus:
+            from collections import OrderedDict
+
+            snapshot = torch.load(snapshot_path, map_location='cpu', weights_only=True)
+            model_state = OrderedDict((key.replace('module.', ''), value) for key, value in snapshot.items())
+            model.module.load_state_dict(model_state)
+            model.module.to(self.device)
+        else:
+            snapshot = torch.load(snapshot_path, map_location=self.device, weights_only=True)
+            model.load_state_dict(snapshot)
+
+        print(f"Snapshot loaded from {snapshot_path}")
+
     def early_stopping(self, patience, epochs_without_improving):
         '''
         This function checks if the validation loss is increasing. If it is for more than patience times,
@@ -258,6 +318,54 @@ class Diffusion:
         if epochs_without_improving >= patience:
             print('Early stopping! Training stopped')
             return True
+
+    def fine_tuning_VAE(self, dataloader, epochs, learning_rate):
+
+        print("Fine-tuning VAE...")
+        device = self.device
+        vae = self.pipe.vae
+        # save_path = self.VAE_weight_path_HR
+        save_path = self.VAE_weight_path_LR
+
+        optimizer = torch.optim.AdamW(vae.parameters(), lr=learning_rate)
+
+        perceptual_loss_fn = PerceptualLoss(device=device)
+        mse_loss_fn = torch.nn.MSELoss()
+        loss_fn = CombinedLoss(perceptual_loss_fn, mse_loss_fn, alpha=0.5, device=device)
+
+        vae.train()
+        for epoch in range(epochs):
+            total_loss = 0
+            for lr_images, hr_images in tqdm(dataloader):
+                lr_images = torch.stack([img for img in lr_images]).to(device).to(torch.float32)
+                hr_images = torch.stack([img for img in hr_images]).to(device).to(torch.float32)
+
+                if self.multiple_gpus:
+                    # latents = self.vae_model_HR.module.encode(hr_images).latent_dist.sample()
+                    latents = self.vae_model_LR.module.encode(lr_images).latent_dist.sample()
+                    # reconstructed_images = self.vae_model_HR.module.decode(latents).sample
+                    reconstructed_images = self.vae_model_LR.module.decode(latents).sample
+                else:
+                    # latents = self.vae_model_HR.encode(hr_images).latent_dist.sample()
+                    latents = self.vae_model_LR.encode(lr_images).latent_dist.sample()
+                    # reconstructed_images = self.vae_model_HR.decode(latents).sample
+                    reconstructed_images = self.vae_model_LR.decode(latents).sample
+                # loss = loss_fn(reconstructed_images, hr_images)
+                loss = loss_fn(reconstructed_images, lr_images)
+
+                total_loss += loss.item()
+
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
+            avg_loss = total_loss / len(dataloader)
+            print(f"Epoch [{epoch+1}/{epochs}], Loss: {avg_loss:.4f}")
+
+            self._save_snapshot_VAE(vae, save_path)
+            print(f"Fine-tuned VAE model saved at {save_path}")
+
+        vae.eval()
+        return vae
 
     def train(self, lr, epochs, check_preds_epoch, train_loader, val_loader, patience, loss, lr_scheduler=None):
         '''
@@ -327,6 +435,9 @@ class Diffusion:
             for i,(lr_img,hr_img) in enumerate(pbar_train):
                 lr_img = lr_img.to(self.device)
                 hr_img = hr_img.to(self.device)
+                lr_img = self.vae_model_LR.encode(lr_img).latent_dist.sample()
+                hr_img = self.vae_model_HR.encode(hr_img).latent_dist.sample()
+
                 t = self.sample_timesteps(hr_img.shape[0]).to(self.device)
                 # t is a unidimensional tensor of shape (hr_img.shape[0] that is the batch_size) with random integers from 1 to noise_steps.
                 x_t, noise = self.noise_images(hr_img, t) # get the noisy images
@@ -381,6 +492,8 @@ class Diffusion:
                     for (lr_img,hr_img) in pbar_val:
                         lr_img = lr_img.to(self.device)
                         hr_img = hr_img.to(self.device)
+                        lr_img = self.vae_model_LR.encode(lr_img).latent_dist.sample()
+                        hr_img = self.vae_model_HR.encode(hr_img).latent_dist.sample()
 
                         t = self.sample_timesteps(hr_img.shape[0]).to(self.device) # t is a unidimensional tensor of shape (images.shape[0] that is the batch_size)with random integers from 1 to noise_steps.
                         x_t, noise = self.noise_images(hr_img, t) # get batch_size noise images
@@ -438,6 +551,53 @@ class Diffusion:
 
         plt.savefig(os.path.join(os.getcwd(), 'models_run', self.model_name, 'results', f'superres_{epoch}_epoch.png'))
 
+class CombinedLoss(nn.Module):
+    def __init__(self, perceptual_loss, mse_loss, alpha=0.5, device='cuda'):
+        super(CombinedLoss, self).__init__()
+        self.perceptual_loss = perceptual_loss
+        self.mse_loss = mse_loss
+        self.alpha = alpha
+        self.device = device
+
+    def forward(self, input, target):
+        perceptual_loss_value = self.perceptual_loss(input, target)
+        mse_loss_value = self.mse_loss(input, target)
+        combined_loss = self.alpha * perceptual_loss_value + (1 - self.alpha) * mse_loss_value
+        return combined_loss
+    
+class PerceptualLoss(nn.Module):
+    def __init__(self, feature_layers=[3, 8, 15], device='cuda'):
+        super(PerceptualLoss, self).__init__()
+        vgg = models.vgg16(weights='VGG16_Weights.IMAGENET1K_V1').features.to(device).eval()
+        self.layers = feature_layers
+        self.vgg = nn.Sequential(*[vgg[i] for i in range(max(feature_layers) + 1)])
+        for param in self.vgg.parameters():
+            param.requires_grad = False
+
+    def forward(self, sr_images, hr_images):
+        sr_images = self._preprocess_for_vgg(sr_images)
+        hr_images = self._preprocess_for_vgg(hr_images)
+        sr_features = self._extract_features(sr_images)
+        hr_features = self._extract_features(hr_images)
+        loss = 0
+        for sr_feat, hr_feat in zip(sr_features, hr_features):
+            loss += nn.functional.mse_loss(sr_feat, hr_feat)
+        return loss
+
+    def _extract_features(self, images):
+        features = []
+        x = images
+        for i, layer in enumerate(self.vgg):
+            x = layer(x)
+            if i in self.layers:
+                features.append(x)
+        return features
+
+    def _preprocess_for_vgg(self, images):
+        # Assumes input images are in range [0, 1]
+        images = (images - torch.tensor([0.485, 0.456, 0.406], device=images.device).view(1, 3, 1, 1)) / torch.tensor([0.229, 0.224, 0.225], device=images.device).view(1, 3, 1, 1)
+        return images
+    
 def launch(args):
     '''
     This function is the main and call the training, the sampling and all the other functions in the Diffusion class.
@@ -494,6 +654,8 @@ def launch(args):
     multiple_gpus = args.multiple_gpus
     ema_smoothing = args.ema_smoothing
     Blur_radius = args.Blur_radius
+    VAE_weight_path_LR = args.VAE_weight_path_LR
+    VAE_weight_path_HR = args.VAE_weight_path_HR
 
     if Blur_radius.lower() != 'random':
         Blur_radius = float(Blur_radius)
@@ -520,7 +682,8 @@ def launch(args):
         device = int(os.environ["LOCAL_RANK"])
         torch.cuda.set_device(int(device))
     else:
-        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        device = torch.device('cuda' if torch.cuda.is_available() else 'mps' if torch.backends.mps.is_available() else 'cpu')
+        # device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         print('Using single GPU')
 
     if Degradation_type.lower() == 'downblur':
@@ -595,44 +758,54 @@ def launch(args):
 
     print("Num params: ", sum(p.numel() for p in model.parameters()))
 
+    model_path = "CompVis/stable-diffusion-v1-4"
+    pipe = StableDiffusionPipeline.from_pretrained(model_path)
+    vae_model = pipe.vae
+        
     if multiple_gpus:
         model = DDP(model, device_ids=[device], find_unused_parameters=True)
+        vae_model = DDP(vae_model, device_ids=[device], find_unused_parameters=True)
 
     snapshot_path = os.path.join(snapshot_folder_path, snapshot_name)
+    VAE_weight_path_LR = os.path.join(os.curdir, 'models_run', VAE_weight_path_LR)
+    VAE_weight_path_HR = os.path.join(os.curdir, 'models_run', VAE_weight_path_HR)
 
     diffusion = Diffusion(
-        noise_schedule=noise_schedule, model=model,
+        noise_schedule=noise_schedule, model=model, vae_model=vae_model,
         snapshot_path=snapshot_path,
+        VAE_weight_path_LR=VAE_weight_path_LR,
+        VAE_weight_path_HR=VAE_weight_path_HR,
         noise_steps=noise_steps, beta_start=1e-4, beta_end=0.02, 
         magnification_factor=magnification_factor,device=device,
         image_size=image_size, model_name=model_name, Degradation_type=Degradation_type,
         multiple_gpus=multiple_gpus, ema_smoothing=ema_smoothing)
         
-    # Training 
-    diffusion.train(
-        lr=lr, epochs=epochs, check_preds_epoch=check_preds_epoch,
-        train_loader=train_loader, val_loader=val_loader, patience=patience, loss=loss,
-        lr_scheduler=lr_scheduler)
+    diffusion.fine_tuning_VAE(train_loader, epochs=20, learning_rate=1e-4)
+    # # Training 
+    # diffusion.train(
+    #     lr=lr, epochs=epochs, check_preds_epoch=check_preds_epoch,
+    #     train_loader=train_loader, val_loader=val_loader, patience=patience, loss=loss,
+    #     lr_scheduler=lr_scheduler)
     
     if multiple_gpus:
         destroy_process_group()
 
-    # Sampling
-    fig, axs = plt.subplots(5,3, figsize=(15,15))
-    for i in range(5):
-        lr_img = train_dataset[i][0]
-        hr_img = train_dataset[i][1]
+    # # Sampling
+    # fig, axs = plt.subplots(5,3, figsize=(15,15))
+    # for i in range(5):
+    #     lr_img = train_dataset[i][0]
+    #     hr_img = train_dataset[i][1]
 
-        superres_img = diffusion.sample(n=1,model=model, lr_img=lr_img, input_channels=lr_img.shape[0], generate_video=generate_video)
+    #     superres_img = diffusion.sample(n=1,model=model, lr_img=lr_img, input_channels=lr_img.shape[0], generate_video=generate_video)
 
-        axs[i,0].imshow(lr_img.permute(1,2,0).cpu().numpy())
-        axs[i,0].set_title('Low resolution image')
-        axs[i,1].imshow(hr_img.permute(1,2,0).cpu().numpy())
-        axs[i,1].set_title('High resolution image')
-        axs[i,2].imshow(superres_img[0].permute(1,2,0).cpu().numpy())
-        axs[i,2].set_title('Super resolution image')
+    #     axs[i,0].imshow(lr_img.permute(1,2,0).cpu().numpy())
+    #     axs[i,0].set_title('Low resolution image')
+    #     axs[i,1].imshow(hr_img.permute(1,2,0).cpu().numpy())
+    #     axs[i,1].set_title('High resolution image')
+    #     axs[i,2].imshow(superres_img[0].permute(1,2,0).cpu().numpy())
+    #     axs[i,2].set_title('Super resolution image')
 
-    plt.savefig(os.path.join(os.getcwd(), 'models_run', model_name, 'results', 'superres_results.png'))
+    # plt.savefig(os.path.join(os.getcwd(), 'models_run', model_name, 'results', 'superres_results.png'))
 
 
 if __name__ == '__main__':
@@ -665,6 +838,8 @@ if __name__ == '__main__':
     parser.add_argument('--multiple_gpus', type=str2bool, nargs='?', const=True, default=False)
     parser.add_argument('--ema_smoothing', type=str2bool, nargs='?', const=True, default=False)
     parser.add_argument('--Blur_radius', type=str, default='random')
+    parser.add_argument('--VAE_weight_path_LR', type=str, default=None)
+    parser.add_argument('--VAE_weight_path_HR', type=str, default=None)
     args = parser.parse_args()
     args.snapshot_folder_path = os.path.join(os.curdir, 'models_run', args.model_name, 'weights')
     launch(args)
