@@ -695,7 +695,7 @@ def launch(args):
     else:
         device = torch.device('cuda' if torch.cuda.is_available() else 'mps' if torch.backends.mps.is_available() else 'cpu')
         # device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        print('Using single GPU')
+        print(f'Using single GPU: {device}')
 
     if Degradation_type.lower() == 'downblur':
         if image_size % magnification_factor != 0:

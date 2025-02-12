@@ -184,4 +184,57 @@ print(psnr(img[0].permute(1,2,0).cpu().numpy(), decoded_img[0].permute(1,2,0).de
 # decoded_img4 = vae_model(img).sample
 # # %%
 
+# %% LEARNING RATE SCHEDULE EXAMPLE
+from UNet_model_superres_VMHA import Residual_Attention_UNet_superres
+import torch
+from utils import get_data_superres, get_data_superres_BSRGAN, video_maker, CosineAnnealingWarmupRestarts
+from torchvision import transforms
+from torch.utils.data import DataLoader
+import matplotlib.pyplot as plt
+
+image_size = 256
+device='mps'
+dataset_path = "up42_sentinel2_patches"
+lr = 1e-4
+magnification_factor = 4
+batch_size = 1
+Blur_radius = 0.5
+multiple_gpus = False
+
+model = Residual_Attention_UNet_superres(3, 3, device).to(device)
+optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+scheduler = CosineAnnealingWarmupRestarts(
+                optimizer,
+                first_cycle_steps=15,
+                cycle_mult=2,
+                max_lr=lr,
+                min_lr=1e-5,
+                warmup_steps=5,
+                gamma=0.9
+            )
+
+transform = transforms.Compose([
+transforms.Resize((image_size, image_size)),
+]) # The transforms.ToTensor() is in the get_data_superres function (in there
+# first is applied this transform to y, then the resize according to the magnification_factor
+# in order to get the x which is the lr_img and finally the to_tensor for both x
+# and y is applied)
+
+train_path = f'{dataset_path}/train_original'
+valid_path = f'{dataset_path}/val_original'
+test_path = f'{dataset_path}/test_original'
+
+train_dataset = get_data_superres(train_path, magnification_factor, Blur_radius, False, 'PIL', transform)
+train_loader = DataLoader(dataset=train_dataset, batch_size=batch_size, shuffle=True, drop_last=True)
+iters = len(train_loader)
+learning_rate = []
+for epoch in range(5):
+    for i, sample in enumerate(train_loader):
+        scheduler.step()
+        learning_rate.append(optimizer.param_groups[0]['lr'])
+
+plt.plot(learning_rate)
+plt.show()
+# %%
+
 # %%
