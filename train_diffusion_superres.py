@@ -15,6 +15,13 @@ from ViT_model import ViTModel
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.distributed import init_process_group, destroy_process_group
 from torch.utils.data.distributed import DistributedSampler
+import torch.nn.functional as F
+
+from lpips import LPIPS  # Perceptual loss library
+
+import warnings
+warnings.filterwarnings("ignore", category=UserWarning)
+warnings.filterwarnings("ignore", category=FutureWarning)
 
 from diffusers import StableDiffusionPipeline
 
@@ -25,8 +32,9 @@ class Diffusion:
             model: nn.Module,
             vae_model: nn.Module,
             snapshot_path: str,
-            VAE_weight_path_LR: str,
-            VAE_weight_path_HR: str,
+            # VAE_weight_path_LR: str,
+            # VAE_weight_path_HR: str,
+            VAE_weight_path: str,
             noise_steps=1000,
             beta_start=1e-4,
             beta_end=0.02,
@@ -49,8 +57,9 @@ class Diffusion:
         self.device = device
         self.multiple_gpus = multiple_gpus
 
-        self.VAE_weight_path_LR = VAE_weight_path_LR
-        self.VAE_weight_path_HR = VAE_weight_path_HR
+        # self.VAE_weight_path_LR = VAE_weight_path_LR
+        # self.VAE_weight_path_HR = VAE_weight_path_HR
+        self.VAE_weight_path = VAE_weight_path
 
         self.snapshot_path = snapshot_path
         self.Degradation_type=Degradation_type
@@ -58,8 +67,10 @@ class Diffusion:
         self.ema_smoothing = ema_smoothing
         self.model = model.to(self.device)
 
-        self.vae_model_LR = vae_model.to(self.device)
-        self.vae_model_HR = vae_model.to(self.device)
+        # self.vae_model_LR = vae_model.to(self.device)
+        # self.vae_model_HR = vae_model.to(self.device)
+        self.vae_model = vae_model.to(self.device)
+
         # epoch_run is used by _save_snapshot and _load_snapshot to keep track of the current epoch
         self.epochs_run = 0
         # If a snapshot exists, we load it
@@ -67,13 +78,16 @@ class Diffusion:
             print("Loading snapshot")
             self._load_snapshot()
 
-        if os.path.exists(self.VAE_weight_path_LR):
-            print(f"Loading fine-tuned VAE model LR from {self.VAE_weight_path_LR}...")
-            self._load_snapshot_VAE(self.VAE_weight_path_LR, self.vae_model_LR)
+        # if os.path.exists(self.VAE_weight_path_LR):
+        #     print(f"Loading fine-tuned VAE model LR from {self.VAE_weight_path_LR}...")
+        #     self._load_snapshot_VAE(self.VAE_weight_path_LR, self.vae_model_LR)
 
-        if os.path.exists(self.VAE_weight_path_HR):
-            print(f"Loading fine-tuned VAE model HR from {self.VAE_weight_path_HR}...")
-            self._load_snapshot_VAE(self.VAE_weight_path_HR, self.vae_model_HR)
+        # if os.path.exists(self.VAE_weight_path_HR):
+        #     print(f"Loading fine-tuned VAE model HR from {self.VAE_weight_path_HR}...")
+        #     self._load_snapshot_VAE(self.VAE_weight_path_HR, self.vae_model_HR)
+        if os.path.exists(self.VAE_weight_path):
+            print(f"Loading fine-tuned VAE model from {self.VAE_weight_path}...")
+            self._load_snapshot_VAE(self.VAE_weight_path, self.vae_model)
 
         self.noise_schedule = noise_schedule
 
@@ -184,8 +198,14 @@ class Diffusion:
         Output:
             x: a tensor of shape (n, input_channels, self.image_size, self.image_size) with the generated images
         '''
+        self.vae_model_LR.eval()
+        self.vae_model_HR.eval()
+
+        # lr_img = transforms.Resize((self.image_size, self.image_size))(lr_img)
         lr_img = lr_img.to(self.device).unsqueeze(0)
+
         lr_img = self.vae_model_LR.encode(lr_img).latent_dist.sample()
+        # lr_img = self.vae_model_HR.encode(lr_img).latent_dist.sample()
 
         frames = [] # used to store the frames if we want to generate a video
         model.eval() # disables dropout and batch normalization
@@ -195,7 +215,10 @@ class Diffusion:
                 x = torch.randn((n, 4, self.image_size//8, self.image_size//8))
             else:
                 raise ValueError('The degradation type must be either BSRGAN or DownBlur')
+            
             x = x.to(self.device) 
+            # x = 0.1*lr_img+0.9*x
+            
             for i in tqdm(reversed(range(1, self.noise_steps)), position=0): 
                 t = (torch.ones(n) * i).long().to(self.device) # tensor of shape (n) with all the elements equal to i.
                 # Basically, each of the n image will be processed with the same integer time step t.
@@ -326,41 +349,66 @@ class Diffusion:
 
         print("Fine-tuning VAE...")
         device = self.device
-        vae = self.pipe.vae
+        vae = self.vae_model
         # save_path = self.VAE_weight_path_HR
-        save_path = self.VAE_weight_path_LR
+        # save_path = self.VAE_weight_path_LR
+        save_path = self.VAE_weight_path
 
         optimizer = torch.optim.AdamW(vae.parameters(), lr=learning_rate)
 
-        perceptual_loss_fn = PerceptualLoss(device=device)
-        mse_loss_fn = torch.nn.MSELoss()
-        loss_fn = CombinedLoss(perceptual_loss_fn, mse_loss_fn, alpha=0.5, device=device)
+        # perceptual_loss_fn = PerceptualLoss(device=device)
+        # mse_loss_fn = torch.nn.MSELoss()
+        # loss_fn = CombinedLoss(perceptual_loss_fn, mse_loss_fn, alpha=0.5, device=device)
+        loss_fn = vae_loss(device=device, lambda_rec=1.0, lambda_latent=0.5)
 
         vae.train()
         for epoch in range(epochs):
+            pbar_dataloader = tqdm(dataloader, desc='Fine-tuning VAE', position=0)
             total_loss = 0
-            for lr_images, hr_images in tqdm(dataloader):
+
+            for i,(lr_images,hr_images) in enumerate(pbar_dataloader):
                 lr_images = torch.stack([img for img in lr_images]).to(device).to(torch.float32)
                 hr_images = torch.stack([img for img in hr_images]).to(device).to(torch.float32)
+                lr_images = F.interpolate(lr_images.to('cpu'), scale_factor=self.magnification_factor, mode='bicubic').to(self.device)
 
-                if self.multiple_gpus:
+                # if self.multiple_gpus:
                     # latents = self.vae_model_HR.module.encode(hr_images).latent_dist.sample()
-                    latents = self.vae_model_LR.module.encode(lr_images).latent_dist.sample()
+                    # latents = self.vae_model_LR.module.encode(lr_images).latent_dist.sample()
                     # reconstructed_images = self.vae_model_HR.module.decode(latents).sample
-                    reconstructed_images = self.vae_model_LR.module.decode(latents).sample
-                else:
+                    # reconstructed_images = self.vae_model_LR.module.decode(latents).sample
+                # else:
                     # latents = self.vae_model_HR.encode(hr_images).latent_dist.sample()
-                    latents = self.vae_model_LR.encode(lr_images).latent_dist.sample()
+                    # latents = self.vae_model_LR.encode(lr_images).latent_dist.sample()
                     # reconstructed_images = self.vae_model_HR.decode(latents).sample
-                    reconstructed_images = self.vae_model_LR.decode(latents).sample
+                    # reconstructed_images = self.vae_model_LR.decode(latents).sample
                 # loss = loss_fn(reconstructed_images, hr_images)
-                loss = loss_fn(reconstructed_images, lr_images)
-
+                # loss = loss_fn(reconstructed_images, lr_images)
+                
+                if self.multiple_gpus:
+                    latents_lr = self.vae_model.module.encode(lr_images).latent_dist.sample()
+                    latents_hr = self.vae_model.module.encode(hr_images).latent_dist.sample()
+                    reconstructed_lr = self.vae_model.module.decode(latents_lr).sample
+                    reconstructed_hr = self.vae_model.module.decode(latents_hr).sample
+                else:
+                    latents_lr = self.vae_model.encode(lr_images).latent_dist.sample()
+                    latents_hr = self.vae_model.encode(hr_images).latent_dist.sample()
+                    reconstructed_lr = self.vae_model.decode(latents_lr).sample
+                    reconstructed_hr = self.vae_model.decode(latents_hr).sample
+                        
+                loss = loss_fn(x_LR=lr_images, x_HR=hr_images, latents_lr=latents_lr, latents_hr=latents_hr, reconstructed_lr=reconstructed_lr, reconstructed_hr=reconstructed_hr)
+                if lr_images.shape[0] < 8: # gradient accumulation
+                    loss = loss/4
+                loss.backward()
                 total_loss += loss.item()
 
-                optimizer.zero_grad()
-                loss.backward()
-                optimizer.step()
+                if lr_images.shape[0] < 8: # gradient accumulation
+                    if (i+1) % 4 == 0:
+                        optimizer.step()
+                        optimizer.zero_grad()
+                else:
+                    optimizer.step()
+                    optimizer.zero_grad()
+                
             avg_loss = total_loss / len(dataloader)
             print(f"Epoch [{epoch+1}/{epochs}], Loss: {avg_loss:.4f}")
 
@@ -438,13 +486,18 @@ class Diffusion:
             for i,(lr_img,hr_img) in enumerate(pbar_train):
                 lr_img = lr_img.to(self.device)
                 hr_img = hr_img.to(self.device)
+                lr_img = F.interpolate(lr_img.to('cpu'), scale_factor=self.magnification_factor, mode='bicubic').to(self.device)
                 if self.multiple_gpus:
-                    lr_img = self.vae_model_LR.module.encode(lr_img).latent_dist.sample()
-                    hr_img = self.vae_model_HR.module.encode(hr_img).latent_dist.sample()
+                    # lr_img = self.vae_model_LR.module.encode(lr_img).latent_dist.sample()
+                    # hr_img = self.vae_model_HR.module.encode(hr_img).latent_dist.sample()
+                    lr_img = self.vae_model.module.encode(lr_img).latent_dist.sample()
+                    hr_img = self.vae_model.module.encode(hr_img).latent_dist.sample()
                 else:
-                    lr_img = self.vae_model_LR.encode(lr_img).latent_dist.sample()
-                    hr_img = self.vae_model_HR.encode(hr_img).latent_dist.sample()
-                import ipdb; ipdb.set_trace()
+                    # lr_img = self.vae_model_LR.encode(lr_img).latent_dist.sample()
+                    # hr_img = self.vae_model_HR.encode(hr_img).latent_dist.sample()
+                    lr_img = self.vae_model.encode(lr_img).latent_dist.sample()
+                    hr_img = self.vae_model.encode(hr_img).latent_dist.sample()
+
                 t = self.sample_timesteps(hr_img.shape[0]).to(self.device)
                 # t is a unidimensional tensor of shape (hr_img.shape[0] that is the batch_size) with random integers from 1 to noise_steps.
                 x_t, noise = self.noise_images(hr_img, t) # get the noisy images
@@ -499,12 +552,17 @@ class Diffusion:
                     for (lr_img,hr_img) in pbar_val:
                         lr_img = lr_img.to(self.device)
                         hr_img = hr_img.to(self.device)
+                        lr_img = F.interpolate(lr_img.to('cpu'), scale_factor=self.magnification_factor, mode='bicubic').to(self.device)
                         if self.multiple_gpus:
-                            lr_img = self.vae_model_LR.module.encode(lr_img).latent_dist.sample()
-                            hr_img = self.vae_model_HR.module.encode(hr_img).latent_dist.sample()
+                            # lr_img = self.vae_model_LR.module.encode(lr_img).latent_dist.sample()
+                            # hr_img = self.vae_model_HR.module.encode(hr_img).latent_dist.sample()
+                            lr_img = self.vae_model.module.encode(lr_img).latent_dist.sample()
+                            hr_img = self.vae_model.module.encode(hr_img).latent_dist.sample()
                         else:
-                            lr_img = self.vae_model_LR.encode(lr_img).latent_dist.sample()
-                            hr_img = self.vae_model_HR.encode(hr_img).latent_dist.sample()
+                            # lr_img = self.vae_model_LR.encode(lr_img).latent_dist.sample()
+                            # hr_img = self.vae_model_HR.encode(hr_img).latent_dist.sample()
+                            lr_img = self.vae_model.encode(lr_img).latent_dist.sample()
+                            hr_img = self.vae_model.encode(hr_img).latent_dist.sample()
 
                         t = self.sample_timesteps(hr_img.shape[0]).to(self.device) # t is a unidimensional tensor of shape (images.shape[0] that is the batch_size)with random integers from 1 to noise_steps.
                         x_t, noise = self.noise_images(hr_img, t) # get batch_size noise images
@@ -608,7 +666,36 @@ class PerceptualLoss(nn.Module):
         # Assumes input images are in range [0, 1]
         images = (images - torch.tensor([0.485, 0.456, 0.406], device=images.device).view(1, 3, 1, 1)) / torch.tensor([0.229, 0.224, 0.225], device=images.device).view(1, 3, 1, 1)
         return images
+
+class vae_loss(nn.Module):
+    def __init__(self, device, lambda_rec=1.0, lambda_latent=0.5):
+        super(vae_loss, self).__init__()
+        self.lpips_loss = LPIPS(net='vgg').to(device)
+        self.lambda_rec = lambda_rec
+        self.lambda_latent = lambda_latent
+        
+    def forward(self, x_LR, x_HR, latents_lr, latents_hr, reconstructed_lr, reconstructed_hr):
+        rec_loss = self._reconstruction_loss(x_LR, x_HR, reconstructed_lr, reconstructed_hr)
+        latent_loss = self._latent_consistency_loss(latents_lr, latents_hr)
+        total_loss = self.lambda_rec * rec_loss + self.lambda_latent * latent_loss
+        return total_loss
+
+    def _reconstruction_loss(self, x_LR, x_HR, reconstructed_lr, reconstructed_hr):
+        rec_loss = (F.l1_loss(reconstructed_hr, x_HR) + F.l1_loss(reconstructed_lr, x_LR) +
+            self.lpips_loss(reconstructed_hr, x_HR).mean())
+        return rec_loss
     
+    def _latent_consistency_loss(self, latents_lr, latents_hr):
+        '''
+        The reason for this loss is that we want the latent space of the low resolution images
+        to be similar to the latent space of the high resolution images. This is because the semantic
+        information should be the same in both the low and high resolution images and in the latent 
+        space we want all this information to be located and all the perceptual information to be
+        discarded.
+        '''
+        latent_loss = F.mse_loss(latents_lr, latents_hr)
+        return latent_loss 
+
 def launch(args):
     '''
     This function is the main and call the training, the sampling and all the other functions in the Diffusion class.
@@ -665,8 +752,9 @@ def launch(args):
     multiple_gpus = args.multiple_gpus
     ema_smoothing = args.ema_smoothing
     Blur_radius = args.Blur_radius
-    VAE_weight_path_LR = args.VAE_weight_path_LR
-    VAE_weight_path_HR = args.VAE_weight_path_HR
+    # VAE_weight_path_LR = args.VAE_weight_path_LR
+    # VAE_weight_path_HR = args.VAE_weight_path_HR
+    VAE_weight_path = args.VAE_weight_path
 
     if Blur_radius.lower() != 'random':
         Blur_radius = float(Blur_radius)
@@ -772,21 +860,23 @@ def launch(args):
     model_path = "CompVis/stable-diffusion-v1-4"
     pipe = StableDiffusionPipeline.from_pretrained(model_path)
     vae_model = pipe.vae
-    vae_model = vae_model.to(device)
+    vae_model = pipe.vae.to(device)
         
     if multiple_gpus:
         model = DDP(model, device_ids=[device], find_unused_parameters=True)
         vae_model = DDP(vae_model, device_ids=[device], find_unused_parameters=True)
 
     snapshot_path = os.path.join(snapshot_folder_path, snapshot_name)
-    VAE_weight_path_LR = os.path.join(os.curdir, 'models_run', VAE_weight_path_LR)
-    VAE_weight_path_HR = os.path.join(os.curdir, 'models_run', VAE_weight_path_HR)
+    # VAE_weight_path_LR = os.path.join(os.curdir, 'models_run', VAE_weight_path_LR)
+    # VAE_weight_path_HR = os.path.join(os.curdir, 'models_run', VAE_weight_path_HR)
+    VAE_weight_path = os.path.join(os.curdir, 'models_run', VAE_weight_path)
 
     diffusion = Diffusion(
         noise_schedule=noise_schedule, model=model, vae_model=vae_model,
         snapshot_path=snapshot_path,
-        VAE_weight_path_LR=VAE_weight_path_LR,
-        VAE_weight_path_HR=VAE_weight_path_HR,
+        # VAE_weight_path_LR=VAE_weight_path_LR,
+        # VAE_weight_path_HR=VAE_weight_path_HR,
+        VAE_weight_path=VAE_weight_path,
         noise_steps=noise_steps, beta_start=1e-4, beta_end=0.02, 
         magnification_factor=magnification_factor,device=device,
         image_size=image_size, model_name=model_name, Degradation_type=Degradation_type,
@@ -794,30 +884,30 @@ def launch(args):
         
     # diffusion.fine_tuning_VAE(train_loader, epochs=20, learning_rate=1e-4)
 
-    # diffusion.train(
-    #     lr=lr, epochs=epochs, check_preds_epoch=check_preds_epoch,
-    #     train_loader=train_loader, val_loader=val_loader, patience=patience, loss=loss,
-    #     lr_scheduler=lr_scheduler)
+    diffusion.train(
+        lr=lr, epochs=epochs, check_preds_epoch=check_preds_epoch,
+        train_loader=train_loader, val_loader=val_loader, patience=patience, loss=loss,
+        lr_scheduler=lr_scheduler)
     
     if multiple_gpus:
         destroy_process_group()
 
-    # Sampling
-    fig, axs = plt.subplots(5,3, figsize=(15,15))
-    for i in range(5):
-        lr_img = train_dataset[i][0]
-        hr_img = train_dataset[i][1]
 
-        superres_img = diffusion.sample(n=1,model=model, lr_img=lr_img, input_channels=lr_img.shape[0], generate_video=generate_video)
+    # fig, axs = plt.subplots(5,3, figsize=(15,15))
+    # for i in range(5):
+    #     lr_img = train_dataset[i][0]
+    #     hr_img = train_dataset[i][1]
 
-        axs[i,0].imshow(lr_img.permute(1,2,0).detach().cpu().numpy())
-        axs[i,0].set_title('Low resolution image')
-        axs[i,1].imshow(hr_img.permute(1,2,0).detach().cpu().numpy())
-        axs[i,1].set_title('High resolution image')
-        axs[i,2].imshow(superres_img[0].permute(1,2,0).detach().cpu().numpy())
-        axs[i,2].set_title('Super resolution image')
+    #     superres_img = diffusion.sample(n=1,model=model, lr_img=lr_img, input_channels=lr_img.shape[0], generate_video=generate_video)
 
-    plt.savefig(os.path.join(os.getcwd(), 'models_run', model_name, 'results', 'superres_results.png'))
+    #     axs[i,0].imshow(lr_img.permute(1,2,0).detach().cpu().numpy())
+    #     axs[i,0].set_title('Low resolution image')
+    #     axs[i,1].imshow(hr_img.permute(1,2,0).detach().cpu().numpy())
+    #     axs[i,1].set_title('High resolution image')
+    #     axs[i,2].imshow(superres_img[0].permute(1,2,0).detach().cpu().numpy())
+    #     axs[i,2].set_title('Super resolution image')
+
+    # plt.savefig(os.path.join(os.getcwd(), 'models_run', model_name, 'results', 'superres_results.png'))
 
 
 if __name__ == '__main__':
@@ -842,7 +932,7 @@ if __name__ == '__main__':
     parser.add_argument('--dataset_path', type=str, default=None)
     parser.add_argument('--inp_out_channels', type=int, default=3) # input channels must be the same of the output channels
     parser.add_argument('--generate_video', type=str2bool, nargs='?', const=True, default=False)
-    parser.add_argument('--loss', type=str)
+    parser.add_argument('--loss', type=str, default=None)
     parser.add_argument('--magnification_factor', type=int)
     parser.add_argument('--UNet_type', type=str, default='Residual Attention UNet') # 'Residual Attention UNet' or 'Residual MultiHead Attention UNet' or 'Residual Vision MultiHead Attention UNet'
     parser.add_argument('--Degradation_type', type=str, default='DownBlur') # 'BSRGAN' or 'DownBlur' or 'DownBlurNoise'
@@ -850,8 +940,9 @@ if __name__ == '__main__':
     parser.add_argument('--multiple_gpus', type=str2bool, nargs='?', const=True, default=False)
     parser.add_argument('--ema_smoothing', type=str2bool, nargs='?', const=True, default=False)
     parser.add_argument('--Blur_radius', type=str, default='random')
-    parser.add_argument('--VAE_weight_path_LR', type=str, default=None)
-    parser.add_argument('--VAE_weight_path_HR', type=str, default=None)
+    # parser.add_argument('--VAE_weight_path_LR', type=str, default=None)
+    # parser.add_argument('--VAE_weight_path_HR', type=str, default=None)
+    parser.add_argument('--VAE_weight_path', type=str, default=None)
     args = parser.parse_args()
     args.snapshot_folder_path = os.path.join(os.curdir, 'models_run', args.model_name, 'weights')
     launch(args)

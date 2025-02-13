@@ -346,11 +346,15 @@ class Residual_Attention_UNet_superres(nn.Module):
         lr_img = self.LR_encoder(lr_img)
  
         # UPSAMPLE LR IMAGE
-        try:
-            upsampled_lr_img = F.interpolate(lr_img, scale_factor=magnification_factor, mode='bicubic')
-        except:
-            upsampled_lr_img = F.interpolate(lr_img.to('cpu'), scale_factor=magnification_factor, mode='bicubic').to(self.device)
-
+        if lr_img.shape[-1] < x.shape[-1]:
+            raise ValueError('The low resolution image should be already resized to the high resolution image size.')
+            # try:
+            #     upsampled_lr_img = F.interpolate(lr_img, scale_factor=magnification_factor, mode='bicubic')
+            # except:
+            #     upsampled_lr_img = F.interpolate(lr_img.to('cpu'), scale_factor=magnification_factor, mode='bicubic').to(self.device)
+        else:
+            # raise ValueError('The low resolution image should have a smaller size than the input image.')
+            upsampled_lr_img = lr_img
         upsampled_lr_img = self.conv_upsampled_lr_img(upsampled_lr_img)
 
         # SUM THE UP SAMPLED LR IMAGE WITH THE INPUT IMAGE
