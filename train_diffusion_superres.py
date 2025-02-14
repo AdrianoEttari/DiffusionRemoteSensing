@@ -198,14 +198,17 @@ class Diffusion:
         Output:
             x: a tensor of shape (n, input_channels, self.image_size, self.image_size) with the generated images
         '''
-        self.vae_model_LR.eval()
-        self.vae_model_HR.eval()
+        # self.vae_model_LR.eval()
+        # self.vae_model_HR.eval()
+        self.vae_model.eval()
 
         # lr_img = transforms.Resize((self.image_size, self.image_size))(lr_img)
         lr_img = lr_img.to(self.device).unsqueeze(0)
 
-        lr_img = self.vae_model_LR.encode(lr_img).latent_dist.sample()
+        # lr_img = self.vae_model_LR.encode(lr_img).latent_dist.sample()
         # lr_img = self.vae_model_HR.encode(lr_img).latent_dist.sample()
+        lr_img = F.interpolate(lr_img.to('cpu'), scale_factor=self.magnification_factor, mode='bicubic').to(self.device)
+        lr_img = self.vae_model.encode(lr_img).latent_dist.sample()
 
         frames = [] # used to store the frames if we want to generate a video
         model.eval() # disables dropout and batch normalization
@@ -217,7 +220,7 @@ class Diffusion:
                 raise ValueError('The degradation type must be either BSRGAN or DownBlur')
             
             x = x.to(self.device) 
-            # x = 0.1*lr_img+0.9*x
+            # x = 0.5*lr_img+0.5*x
             
             for i in tqdm(reversed(range(1, self.noise_steps)), position=0): 
                 t = (torch.ones(n) * i).long().to(self.device) # tensor of shape (n) with all the elements equal to i.
@@ -239,9 +242,13 @@ class Diffusion:
                     frames.append(x)
         if generate_video == True:
             video_maker(frames, os.path.join(os.getcwd(), 'models_run', self.model_name, 'results', 'video_denoising.mp4'), 100)
-        x = self.vae_model_HR.decode(x).sample
+        # x = self.vae_model_HR.decode(x).sample
+
+        latent_sr_img = x
+        latent_lr_img = lr_img
+        sr_img = self.vae_model.decode(latent_sr_img).sample
         model.train() # enables dropout and batch normalization
-        return x
+        return latent_lr_img, latent_sr_img, sr_img
 
     def _save_snapshot(self, epoch, model):
         '''
@@ -884,30 +891,33 @@ def launch(args):
         
     # diffusion.fine_tuning_VAE(train_loader, epochs=20, learning_rate=1e-4)
 
-    diffusion.train(
-        lr=lr, epochs=epochs, check_preds_epoch=check_preds_epoch,
-        train_loader=train_loader, val_loader=val_loader, patience=patience, loss=loss,
-        lr_scheduler=lr_scheduler)
+    # diffusion.train(
+    #     lr=lr, epochs=epochs, check_preds_epoch=check_preds_epoch,
+    #     train_loader=train_loader, val_loader=val_loader, patience=patience, loss=loss,
+    #     lr_scheduler=lr_scheduler)
     
     if multiple_gpus:
         destroy_process_group()
 
+    fig, axs = plt.subplots(5,5, figsize=(15,15))
+    for i in range(5):
+        lr_img = train_dataset[i][0]
+        hr_img = train_dataset[i][1]
 
-    # fig, axs = plt.subplots(5,3, figsize=(15,15))
-    # for i in range(5):
-    #     lr_img = train_dataset[i][0]
-    #     hr_img = train_dataset[i][1]
+        latent_lr_img, latent_sr_img, superres_img = diffusion.sample(n=1,model=model, lr_img=lr_img, input_channels=lr_img.shape[0], generate_video=generate_video)
 
-    #     superres_img = diffusion.sample(n=1,model=model, lr_img=lr_img, input_channels=lr_img.shape[0], generate_video=generate_video)
+        axs[i,0].imshow(lr_img.permute(1,2,0).detach().cpu().numpy())
+        axs[i,0].set_title('Low resolution image')
+        axs[i,1].imshow(latent_lr_img[0][:3,:,:].permute(1,2,0).detach().cpu().numpy())
+        axs[i,1].set_title('Low resolution latent')
+        axs[i,2].imshow(hr_img.permute(1,2,0).detach().cpu().numpy())
+        axs[i,2].set_title('High resolution image')
+        axs[i,3].imshow(superres_img[0].permute(1,2,0).detach().cpu().numpy())
+        axs[i,3].set_title('Super resolution image')
+        axs[i,4].imshow(latent_sr_img[0][:3,:,:].permute(1,2,0).detach().cpu().numpy())
+        axs[i,4].set_title('Super resolution latent')
 
-    #     axs[i,0].imshow(lr_img.permute(1,2,0).detach().cpu().numpy())
-    #     axs[i,0].set_title('Low resolution image')
-    #     axs[i,1].imshow(hr_img.permute(1,2,0).detach().cpu().numpy())
-    #     axs[i,1].set_title('High resolution image')
-    #     axs[i,2].imshow(superres_img[0].permute(1,2,0).detach().cpu().numpy())
-    #     axs[i,2].set_title('Super resolution image')
-
-    # plt.savefig(os.path.join(os.getcwd(), 'models_run', model_name, 'results', 'superres_results.png'))
+    plt.savefig(os.path.join(os.getcwd(), 'models_run', model_name, 'results', 'superres_results.png'))
 
 
 if __name__ == '__main__':

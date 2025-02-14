@@ -250,7 +250,7 @@ from PIL import Image
 import numpy as np
 
 model_path = "CompVis/stable-diffusion-v1-4"
-snapshot_path = os.path.join('models_run','VAE_up42_LRandHR_finetuning_gradientAccumulation')
+snapshot_path = os.path.join('models_run','VAE_up42_LRandHR_finetuning')
 device = 'mps'
 pipe = StableDiffusionPipeline.from_pretrained(model_path)
 vae_model = pipe.vae
