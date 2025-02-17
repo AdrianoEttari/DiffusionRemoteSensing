@@ -341,7 +341,6 @@ class Residual_Attention_UNet_superres(nn.Module):
 
         # INITIAL CONVOLUTION
         x = self.conv0(x)
-
         # LR ENCODER
         lr_img = self.LR_encoder(lr_img)
  

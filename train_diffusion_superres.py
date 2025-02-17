@@ -220,7 +220,8 @@ class Diffusion:
                 raise ValueError('The degradation type must be either BSRGAN or DownBlur')
             
             x = x.to(self.device) 
-            # x = 0.5*lr_img+0.5*x
+
+            x = 0.05*lr_img+0.95*x
             
             for i in tqdm(reversed(range(1, self.noise_steps)), position=0): 
                 t = (torch.ones(n) * i).long().to(self.device) # tensor of shape (n) with all the elements equal to i.
@@ -510,7 +511,6 @@ class Diffusion:
                 x_t, noise = self.noise_images(hr_img, t) # get the noisy images
 
                 optimizer.zero_grad() # set the gradients to 0
-
                 predicted_noise = model(x_t, t, lr_img, self.magnification_factor) 
 
                 train_loss = loss_function(predicted_noise, noise)
@@ -889,7 +889,7 @@ def launch(args):
         image_size=image_size, model_name=model_name, Degradation_type=Degradation_type,
         multiple_gpus=multiple_gpus, ema_smoothing=ema_smoothing)
         
-    # diffusion.fine_tuning_VAE(train_loader, epochs=20, learning_rate=1e-4)
+    # diffusion.fine_tuning_VAE(train_loader, epochs=10, learning_rate=1e-4)
 
     # diffusion.train(
     #     lr=lr, epochs=epochs, check_preds_epoch=check_preds_epoch,
@@ -918,6 +918,7 @@ def launch(args):
         axs[i,4].set_title('Super resolution latent')
 
     plt.savefig(os.path.join(os.getcwd(), 'models_run', model_name, 'results', 'superres_results.png'))
+    # plt.savefig(os.path.join(os.getcwd(), 'superres_results.png'))
 
 
 if __name__ == '__main__':
