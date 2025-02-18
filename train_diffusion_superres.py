@@ -372,8 +372,9 @@ class Diffusion:
         vae.train()
         for epoch in range(epochs):
             pbar_dataloader = tqdm(dataloader, desc='Fine-tuning VAE', position=0)
+            if self.multiple_gpus:
+                pbar_dataloader.sampler.set_epoch(epoch) 
             total_loss = 0
-
             for i,(lr_images,hr_images) in enumerate(pbar_dataloader):
                 lr_images = torch.stack([img for img in lr_images]).to(device).to(torch.float32)
                 hr_images = torch.stack([img for img in hr_images]).to(device).to(torch.float32)
@@ -416,12 +417,20 @@ class Diffusion:
                 else:
                     optimizer.step()
                     optimizer.zero_grad()
-                
-            avg_loss = total_loss / len(dataloader)
-            print(f"Epoch [{epoch+1}/{epochs}], Loss: {avg_loss:.4f}")
+            
+            if self.multiple_gpus:
+                if self.device == 0:
+                    avg_loss = total_loss / len(dataloader)
+                    print(f"Epoch [{epoch+1}/{epochs}], Loss: {avg_loss:.4f}")
 
-            self._save_snapshot_VAE(vae, save_path)
-            print(f"Fine-tuned VAE model saved at {save_path}")
+                    self._save_snapshot_VAE(vae, save_path)
+                    print(f"Fine-tuned VAE model saved at {save_path}")
+            else:
+                avg_loss = total_loss / len(dataloader)
+                print(f"Epoch [{epoch+1}/{epochs}], Loss: {avg_loss:.4f}")
+
+                self._save_snapshot_VAE(vae, save_path)
+                print(f"Fine-tuned VAE model saved at {save_path}")
 
         vae.eval()
         return vae
@@ -891,34 +900,34 @@ def launch(args):
         
     # diffusion.fine_tuning_VAE(train_loader, epochs=10, learning_rate=1e-4)
 
-    # diffusion.train(
-    #     lr=lr, epochs=epochs, check_preds_epoch=check_preds_epoch,
-    #     train_loader=train_loader, val_loader=val_loader, patience=patience, loss=loss,
-    #     lr_scheduler=lr_scheduler)
+    diffusion.train(
+        lr=lr, epochs=epochs, check_preds_epoch=check_preds_epoch,
+        train_loader=train_loader, val_loader=val_loader, patience=patience, loss=loss,
+        lr_scheduler=lr_scheduler)
     
     if multiple_gpus:
         destroy_process_group()
 
-    fig, axs = plt.subplots(5,5, figsize=(15,15))
-    for i in range(5):
-        lr_img = train_dataset[i][0]
-        hr_img = train_dataset[i][1]
+    # fig, axs = plt.subplots(5,5, figsize=(15,15))
+    # for i in range(5):
+    #     lr_img = train_dataset[i][0]
+    #     hr_img = train_dataset[i][1]
 
-        latent_lr_img, latent_sr_img, superres_img = diffusion.sample(n=1,model=model, lr_img=lr_img, input_channels=lr_img.shape[0], generate_video=generate_video)
+    #     latent_lr_img, latent_sr_img, superres_img = diffusion.sample(n=1,model=model, lr_img=lr_img, input_channels=lr_img.shape[0], generate_video=generate_video)
 
-        axs[i,0].imshow(lr_img.permute(1,2,0).detach().cpu().numpy())
-        axs[i,0].set_title('Low resolution image')
-        axs[i,1].imshow(latent_lr_img[0][:3,:,:].permute(1,2,0).detach().cpu().numpy())
-        axs[i,1].set_title('Low resolution latent')
-        axs[i,2].imshow(hr_img.permute(1,2,0).detach().cpu().numpy())
-        axs[i,2].set_title('High resolution image')
-        axs[i,3].imshow(superres_img[0].permute(1,2,0).detach().cpu().numpy())
-        axs[i,3].set_title('Super resolution image')
-        axs[i,4].imshow(latent_sr_img[0][:3,:,:].permute(1,2,0).detach().cpu().numpy())
-        axs[i,4].set_title('Super resolution latent')
+    #     axs[i,0].imshow(lr_img.permute(1,2,0).detach().cpu().numpy())
+    #     axs[i,0].set_title('Low resolution image')
+    #     axs[i,1].imshow(latent_lr_img[0][:3,:,:].permute(1,2,0).detach().cpu().numpy())
+    #     axs[i,1].set_title('Low resolution latent')
+    #     axs[i,2].imshow(hr_img.permute(1,2,0).detach().cpu().numpy())
+    #     axs[i,2].set_title('High resolution image')
+    #     axs[i,3].imshow(superres_img[0].permute(1,2,0).detach().cpu().numpy())
+    #     axs[i,3].set_title('Super resolution image')
+    #     axs[i,4].imshow(latent_sr_img[0][:3,:,:].permute(1,2,0).detach().cpu().numpy())
+    #     axs[i,4].set_title('Super resolution latent')
 
-    plt.savefig(os.path.join(os.getcwd(), 'models_run', model_name, 'results', 'superres_results.png'))
-    # plt.savefig(os.path.join(os.getcwd(), 'superres_results.png'))
+    # plt.savefig(os.path.join(os.getcwd(), 'models_run', model_name, 'results', 'superres_results.png'))
+    # # plt.savefig(os.path.join(os.getcwd(), 'superres_results.png'))
 
 
 if __name__ == '__main__':

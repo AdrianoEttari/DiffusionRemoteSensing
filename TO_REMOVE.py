@@ -307,5 +307,77 @@ axs[2].set_title('Decoded Image')
 plt.show()
 print(psnr(img[0].permute(1,2,0).cpu().numpy(), decoded_img[0].permute(1,2,0).detach().cpu().numpy(), pixel_max=1))
 
+# %% FINE-TUNE VAE HRandLR EXAMPLE ON celebA_100k
+import os
+import matplotlib.pyplot as plt
+import torch
+from torchvision import transforms, models
+from torch.utils.data import DataLoader
+from utils import get_data_superres, get_data_superres_BSRGAN, video_maker, CosineAnnealingWarmupRestarts
+from UNet_model_superres_VMHA import Residual_Attention_UNet_superres, Residual_VisionMultiheadAttention_UNet_superres, Residual_DiffiT_UNet_superres, EMA
+from ViT_model import ViTModel
+from diffusers import StableDiffusionPipeline
+from PIL import Image
+import numpy as np
+
+model_path = "CompVis/stable-diffusion-v1-4"
+snapshot_path = os.path.join('models_run','VAE_celeb100k_LRandHR_finetuning_gradientAccumulation')
+device = 'mps'
+pipe = StableDiffusionPipeline.from_pretrained(model_path)
+vae_model = pipe.vae
+vae_model = vae_model.eval()
+vae_model = vae_model.to(device)
+transform = transforms.Compose([
+    # transforms.Resize((64, 64), interpolation=Image.BICUBIC),
+    transforms.Resize((256, 256), interpolation=Image.BICUBIC),
+    transforms.ToTensor()
+])
+
+def psnr(ground_truth, predicted, pixel_max=255):
+    '''
+    Compute the Peak Signal to Noise Ratio between the real mask and the predicted one.
+
+    The masks must be float32 and not uint8, because the second is 8 bit and so 
+    has just values between 0 and 255.
+    '''
+    ground_truth = ground_truth.astype(np.float32)  # Convert to float
+    predicted = predicted.astype(np.float32)
+    mse = np.mean((ground_truth - predicted) ** 2)
+    if mse == 0:
+        return float('inf')  # Perfect match should return infinity
+    return 10 * np.log10(pixel_max**2 / mse)
+
+def _load_snapshot_VAE(snapshot_path, model):
+    '''
+    This function loads the model state and the last epoch of training (so that we can restart the
+    training at this point instead of restarting from 0) from a snapshot.
+    It is a mandatory function in order to be fault tolerant. The reason is that if the training is interrupted, we can resume
+    it from the last snapshot.
+    '''
+    snapshot = torch.load(snapshot_path, map_location=device, weights_only=True)
+    model.load_state_dict(snapshot)
+
+    print(f"Snapshot loaded from {snapshot_path}")
+
+_load_snapshot_VAE(snapshot_path, vae_model)
+
+img = Image.open(os.path.join("celebA_10k","test_original","000100.jpg"))
+img = transform(img).unsqueeze(0).to(device)
+encoded_img = vae_model.encode(img).latent_dist.sample()
+decoded_img = vae_model.decode(encoded_img).sample
+
+
+fig, axs = plt.subplots(1,3, figsize=(10,5))
+axs = axs.ravel()
+axs[0].imshow(img[0].permute(1,2,0).cpu())
+axs[0].set_title('Original Image')
+axs[1].imshow(encoded_img[0][:3,:,:].permute(1,2,0).detach().cpu())
+axs[1].set_title('Encoded Image')
+axs[2].imshow(decoded_img[0].permute(1,2,0).detach().cpu())
+axs[2].set_title('Decoded Image')   
+plt.show()
+print(psnr(img[0].permute(1,2,0).cpu().numpy(), decoded_img[0].permute(1,2,0).detach().cpu().numpy(), pixel_max=1))
+
+
 
 # %%
