@@ -265,7 +265,7 @@ class get_data_superres_PLAIN(Dataset):
         self.filenames = sorted(os.listdir(self.lr_imgs_folder)) # lr_img and hr_img filenames are the same
 
     def __len__(self):
-        len(self.filenames)
+        return len(self.filenames)
 
     def __getitem__(self, idx):
         lr_img_path = os.path.join(self.lr_imgs_folder, self.filenames[idx])
@@ -277,6 +277,7 @@ class get_data_superres_PLAIN(Dataset):
         transform = transforms.ToTensor()
         lr_img = transform(lr_img)
         hr_img = transform(hr_img)
+
         return lr_img, hr_img
 
 class data_organizer_superresolution():

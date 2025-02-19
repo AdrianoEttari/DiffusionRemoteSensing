@@ -957,13 +957,14 @@ def launch(args):
     ########## ENCODE DATASET AND SAVE IT ##########
     encoded_images_train_save_path = os.path.join(dataset_path+'_VAE_encoded', "train_original")
     encoded_images_val_save_path = os.path.join(dataset_path+'_VAE_encoded', "val_original")
-    diffusion.encoded_dataset_VAE(dataloader=train_loader, save_path=encoded_images_train_save_path)
-    diffusion.encoded_dataset_VAE(dataloader=val_loader, save_path=encoded_images_val_save_path)
+    # diffusion.encoded_dataset_VAE(dataloader=train_loader, save_path=encoded_images_train_save_path)
+    # diffusion.encoded_dataset_VAE(dataloader=val_loader, save_path=encoded_images_val_save_path)
 
-    for set_path in [encoded_images_train_save_path, encoded_images_val_save_path]:
-        for i, img_name in enumerate(os.listdir(os.path.join(set_path, "lr_img"))):
-                    os.rename(os.path.join(set_path, "lr_img", img_name), os.path.join(set_path, "lr_img", str(i)+".npy"))
-                    os.rename(os.path.join(set_path, "hr_img", img_name), os.path.join(set_path, "hr_img", str(i)+".npy"))
+    # for set_path in [encoded_images_train_save_path, encoded_images_val_save_path]:
+    #     for i, img_name in tqdm(enumerate(os.listdir(os.path.join(set_path, "lr_img"))), desc='Renaming images', position=0):
+    #         if img_name.endswith('.npy'):
+    #                 os.rename(os.path.join(set_path, "lr_img", img_name), os.path.join(set_path, "lr_img", str(i+50000)+".npy"))
+    #                 os.rename(os.path.join(set_path, "hr_img", img_name), os.path.join(set_path, "hr_img", str(i+50000)+".npy"))
 
     train_loader = dataloader_POST_encoding_maker(encoded_images_train_save_path, batch_size, multiple_gpus)
     val_loader = dataloader_POST_encoding_maker(encoded_images_val_save_path, batch_size, multiple_gpus)
@@ -980,8 +981,8 @@ def launch(args):
     ########## SAMPLING ##########
     # fig, axs = plt.subplots(5,5, figsize=(15,15))
     # for i in range(5):
-    #     lr_img = train_dataset[i][0]
-    #     hr_img = train_dataset[i][1]
+    #     lr_img = train_loader.dataset[i][0]
+    #     hr_img = train_loader.dataset[i][1]
 
     #     latent_lr_img, latent_sr_img, superres_img = diffusion.sample(n=1,model=model, lr_img=lr_img, input_channels=lr_img.shape[0], generate_video=generate_video)
 
@@ -997,7 +998,7 @@ def launch(args):
     #     axs[i,4].set_title('Super resolution latent')
 
     # plt.savefig(os.path.join(os.getcwd(), 'models_run', model_name, 'results', 'superres_results.png'))
-    ## plt.savefig(os.path.join(os.getcwd(), 'superres_results.png'))
+    # plt.savefig(os.path.join(os.getcwd(), 'superres_results.png'))
 
 
 if __name__ == '__main__':

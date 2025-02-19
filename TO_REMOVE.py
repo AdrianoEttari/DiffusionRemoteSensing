@@ -377,7 +377,3 @@ axs[2].imshow(decoded_img[0].permute(1,2,0).detach().cpu())
 axs[2].set_title('Decoded Image')   
 plt.show()
 print(psnr(img[0].permute(1,2,0).cpu().numpy(), decoded_img[0].permute(1,2,0).detach().cpu().numpy(), pixel_max=1))
-
-
-
-# %%
