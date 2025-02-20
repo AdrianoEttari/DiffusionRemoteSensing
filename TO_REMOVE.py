@@ -322,13 +322,13 @@ import numpy as np
 
 model_path = "CompVis/stable-diffusion-v1-4"
 snapshot_path = os.path.join('models_run','VAE_celeb100k_LRandHR_finetuning_gradientAccumulation')
-device = 'mps'
+device = 'cuda'
 pipe = StableDiffusionPipeline.from_pretrained(model_path)
 vae_model = pipe.vae
 vae_model = vae_model.eval()
 vae_model = vae_model.to(device)
 transform = transforms.Compose([
-    # transforms.Resize((64, 64), interpolation=Image.BICUBIC),
+    transforms.Resize((64, 64), interpolation=Image.BICUBIC),
     transforms.Resize((256, 256), interpolation=Image.BICUBIC),
     transforms.ToTensor()
 ])
@@ -361,7 +361,7 @@ def _load_snapshot_VAE(snapshot_path, model):
 
 _load_snapshot_VAE(snapshot_path, vae_model)
 
-img = Image.open(os.path.join("celebA_10k","test_original","000100.jpg"))
+img = Image.open(os.path.join("celebA_100k","test_original","052120.jpg"))
 img = transform(img).unsqueeze(0).to(device)
 encoded_img = vae_model.encode(img).latent_dist.sample()
 decoded_img = vae_model.decode(encoded_img).sample
@@ -377,3 +377,70 @@ axs[2].imshow(decoded_img[0].permute(1,2,0).detach().cpu())
 axs[2].set_title('Decoded Image')   
 plt.show()
 print(psnr(img[0].permute(1,2,0).cpu().numpy(), decoded_img[0].permute(1,2,0).detach().cpu().numpy(), pixel_max=1))
+
+# %% DIFFUSION MODEL ON celebA_100k
+from train_diffusion_superres_VAEapart import Diffusion
+from UNet_model_superres_VMHA import Residual_Attention_UNet_superres
+import os
+import matplotlib.pyplot as plt
+import torch
+from torchvision import transforms, models
+from torch.utils.data import DataLoader
+from UNet_model_superres_VMHA import Residual_Attention_UNet_superres
+from diffusers import StableDiffusionPipeline
+from PIL import Image
+import numpy as np
+
+noise_schedule='cosine'
+noise_steps=1000
+model_name="Residual_Attention_UNet_superres_magnification4_LRimgsize64_celeb50k_patches_downblur_StableDiffusion_LRandHR_gradientAccumulation_VAEapart"
+ema_smoothing=False
+Degradation_type='downblur'
+input_channels = output_channels = 4
+device = 'cuda'
+VAE_weight_path = os.path.join('models_run','VAE_celeb100k_LRandHR_finetuning_gradientAccumulation')
+image_size=256
+multiple_gpus=False
+magnification_factor=4
+model = Residual_Attention_UNet_superres(input_channels, output_channels, device).to(device)
+model_path = "CompVis/stable-diffusion-v1-4"
+snapshot_folder_path = os.path.join(os.curdir, 'models_run', model_name, 'weights')
+snapshot_path = os.path.join(snapshot_folder_path, "snapshot.pt")
+pipe = StableDiffusionPipeline.from_pretrained(model_path)
+vae_model = pipe.vae
+vae_model = vae_model.eval()
+vae_model = vae_model.to(device)
+
+diffusion = Diffusion(
+    noise_schedule=noise_schedule, model=model, vae_model=vae_model,
+    snapshot_path=snapshot_path,
+    VAE_weight_path=VAE_weight_path,
+    noise_steps=noise_steps, beta_start=1e-4, beta_end=0.02, 
+    magnification_factor=magnification_factor,device=device,
+    image_size=image_size, model_name=model_name, Degradation_type=Degradation_type,
+    multiple_gpus=multiple_gpus, ema_smoothing=ema_smoothing)
+    
+lr_img = Image.open(os.path.join("celebA_100k","test_original","052120.jpg"))
+transform = transforms.Compose([
+    transforms.Resize((64, 64), interpolation=Image.BICUBIC),
+    transforms.ToTensor()
+])
+lr_img = transform(lr_img).to(device)
+
+latent_lr_img, latent_sr_img, superres_img = diffusion.sample(n=1,model=model, lr_img=lr_img, input_channels=img.shape[0], generate_video=False)
+
+fig, axs = plt.subplots(1,5, figsize=(15,15))
+axs = axs.ravel()
+axs[0].imshow(lr_img.permute(1,2,0).cpu())
+axs[0].set_title('Original Image')
+axs[1].imshow(encoded_img[0][:3,:,:].permute(1,2,0).detach().cpu())
+axs[1].set_title('Encoded Image')
+axs[2].imshow(decoded_img[0].permute(1,2,0).detach().cpu())
+axs[2].set_title('Decoded Image')   
+axs[3].imshow(superres_img[0].permute(1,2,0).detach().cpu())
+axs[3].set_title('Super Resolution Image')
+axs[4].imshow(latent_sr_img[0][:3,:,:].permute(1,2,0).detach().cpu())
+axs[4].set_title('Super Resolution Latent')
+plt.show()
+
+# %%

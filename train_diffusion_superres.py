@@ -531,17 +531,6 @@ class Diffusion:
             for i,(lr_img,hr_img) in enumerate(pbar_train):
                 lr_img = lr_img.to(self.device)
                 hr_img = hr_img.to(self.device)
-                # lr_img = F.interpolate(lr_img.to('cpu'), scale_factor=self.magnification_factor, mode='bicubic').to(self.device)
-                # if self.multiple_gpus:
-                #     # lr_img = self.vae_model_LR.module.encode(lr_img).latent_dist.sample()
-                #     # hr_img = self.vae_model_HR.module.encode(hr_img).latent_dist.sample()
-                #     lr_img = self.vae_model.module.encode(lr_img).latent_dist.sample()
-                #     hr_img = self.vae_model.module.encode(hr_img).latent_dist.sample()
-                # else:
-                #     # lr_img = self.vae_model_LR.encode(lr_img).latent_dist.sample()
-                #     # hr_img = self.vae_model_HR.encode(hr_img).latent_dist.sample()
-                #     lr_img = self.vae_model.encode(lr_img).latent_dist.sample()
-                #     hr_img = self.vae_model.encode(hr_img).latent_dist.sample()
 
                 t = self.sample_timesteps(hr_img.shape[0]).to(self.device)
                 # t is a unidimensional tensor of shape (hr_img.shape[0] that is the batch_size) with random integers from 1 to noise_steps.
@@ -575,19 +564,15 @@ class Diffusion:
                     if val_loader is None: # if there is no validation loader, then we save the weights at the frequency check_preds_epoch
                         if self.ema_smoothing:
                             self._save_snapshot(epoch, ema_model)
-                            self.prediction_plot(ema_model, train_loader, epoch)
                         else:
                             self._save_snapshot(epoch, model)
-                            self.prediction_plot(model, train_loader, epoch)
             else:
                 if epoch % check_preds_epoch == 0:
                     if val_loader is None: # if there is no validation loader, then we save the weights at the frequency check_preds_epoch
                         if self.ema_smoothing:
                             self._save_snapshot(epoch, ema_model)
-                            self.prediction_plot(ema_model, train_loader, epoch)
                         else:
                             self._save_snapshot(epoch, model)
-                            self.prediction_plot(model, train_loader, epoch)
 
             if val_loader is not None:
                 with torch.no_grad():
@@ -596,17 +581,6 @@ class Diffusion:
                     for (lr_img,hr_img) in pbar_val:
                         lr_img = lr_img.to(self.device)
                         hr_img = hr_img.to(self.device)
-                        # lr_img = F.interpolate(lr_img.to('cpu'), scale_factor=self.magnification_factor, mode='bicubic').to(self.device)
-                        # if self.multiple_gpus:
-                        #     # lr_img = self.vae_model_LR.module.encode(lr_img).latent_dist.sample()
-                        #     # hr_img = self.vae_model_HR.module.encode(hr_img).latent_dist.sample()
-                        #     lr_img = self.vae_model.module.encode(lr_img).latent_dist.sample()
-                        #     hr_img = self.vae_model.module.encode(hr_img).latent_dist.sample()
-                        # else:
-                        #     # lr_img = self.vae_model_LR.encode(lr_img).latent_dist.sample()
-                        #     # hr_img = self.vae_model_HR.encode(hr_img).latent_dist.sample()
-                        #     lr_img = self.vae_model.encode(lr_img).latent_dist.sample()
-                        #     hr_img = self.vae_model.encode(hr_img).latent_dist.sample()
 
                         t = self.sample_timesteps(hr_img.shape[0]).to(self.device) # t is a unidimensional tensor of shape (images.shape[0] that is the batch_size)with random integers from 1 to noise_steps.
                         x_t, noise = self.noise_images(hr_img, t) # get batch_size noise images
@@ -646,6 +620,7 @@ class Diffusion:
                 if self.early_stopping(patience, epochs_without_improving):
                     break
             print('Epochs without improving: ', epochs_without_improving)
+
 
 class CombinedLoss(nn.Module):
     def __init__(self, perceptual_loss, mse_loss, alpha=0.5, device='cuda'):
@@ -828,7 +803,13 @@ def super_resolution_sampling(diffusion_class, UNet_model, lr_img, generate_vide
     plt.show()
     return superres_img
 
-    
+def VAE_model_maker(device):
+    vae_model_path = "CompVis/stable-diffusion-v1-4"
+    pipe = StableDiffusionPipeline.from_pretrained(vae_model_path)
+    vae_model = pipe.vae
+    vae_model = pipe.vae.to(device)
+    return vae_model
+
 def launch(args):
     '''
     This function is the main and call the training, the sampling and all the other functions in the Diffusion class.
@@ -915,21 +896,17 @@ def launch(args):
         torch.cuda.set_device(int(device))
     else:
         device = torch.device('cuda' if torch.cuda.is_available() else 'mps' if torch.backends.mps.is_available() else 'cpu')
-        # device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         print(f'Using single GPU: {device}')
 
-    train_loader, val_loader = dataloader_PRE_encoding_maker(dataset_path=dataset_path, Degradation_type=Degradation_type,
-                                                 image_size=image_size, magnification_factor=magnification_factor,
-                                                   Blur_radius=Blur_radius, num_crops=num_crops, batch_size=batch_size, 
-                                                    multiple_gpus=multiple_gpus)
+    # train_loader, val_loader = dataloader_PRE_encoding_maker(dataset_path=dataset_path, Degradation_type=Degradation_type,
+    #                                              image_size=image_size, magnification_factor=magnification_factor,
+    #                                                Blur_radius=Blur_radius, num_crops=num_crops, batch_size=batch_size, 
+    #                                                 multiple_gpus=multiple_gpus)
 
     model = UNet_model_maker(UNet_type, input_channels, output_channels, device, image_size)
     print("Num params: ", sum(p.numel() for p in model.parameters()))
 
-    vae_model_path = "CompVis/stable-diffusion-v1-4"
-    pipe = StableDiffusionPipeline.from_pretrained(vae_model_path)
-    vae_model = pipe.vae
-    vae_model = pipe.vae.to(device)
+    vae_model = VAE_model_maker(device)
         
     if multiple_gpus:
         model = DDP(model, device_ids=[device], find_unused_parameters=True)
@@ -957,9 +934,9 @@ def launch(args):
     ########## ENCODE DATASET AND SAVE IT ##########
     encoded_images_train_save_path = os.path.join(dataset_path+'_VAE_encoded', "train_original")
     encoded_images_val_save_path = os.path.join(dataset_path+'_VAE_encoded', "val_original")
-    if len(os.listdir(os.path.join(encoded_images_train_save_path, 'lr_img'))) == 0:
-        diffusion.encoded_dataset_VAE(dataloader=train_loader, save_path=encoded_images_train_save_path)
-        diffusion.encoded_dataset_VAE(dataloader=val_loader, save_path=encoded_images_val_save_path)
+    # if len(os.listdir(os.path.join(encoded_images_train_save_path, 'lr_img'))) == 0:
+    #     diffusion.encoded_dataset_VAE(dataloader=train_loader, save_path=encoded_images_train_save_path)
+    #     diffusion.encoded_dataset_VAE(dataloader=val_loader, save_path=encoded_images_val_save_path)
 
     ########## RENAME IMAGES (OPTIONAL) ##########
     # for set_path in [encoded_images_train_save_path, encoded_images_val_save_path]:
