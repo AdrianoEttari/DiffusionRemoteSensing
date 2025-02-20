@@ -379,7 +379,7 @@ plt.show()
 print(psnr(img[0].permute(1,2,0).cpu().numpy(), decoded_img[0].permute(1,2,0).detach().cpu().numpy(), pixel_max=1))
 
 # %% DIFFUSION MODEL ON celebA_100k
-from train_diffusion_superres_VAEapart import Diffusion
+from train_diffusion_superres import Diffusion
 from UNet_model_superres_VMHA import Residual_Attention_UNet_superres
 import os
 import matplotlib.pyplot as plt
