@@ -41,7 +41,7 @@ class Diffusion:
             beta_end=0.02,
             device='cuda',
             magnification_factor=4,
-            image_size=224,
+            image_size=256,
             model_name='superres',
             Degradation_type='BSRGAN',
             multiple_gpus=False,
@@ -66,18 +66,22 @@ class Diffusion:
         self.Degradation_type=Degradation_type
         
         self.ema_smoothing = ema_smoothing
-        self.model = model.to(self.device)
+
+        if model:
+            self.model = model.to(self.device)
 
         # self.vae_model_LR = vae_model.to(self.device)
         # self.vae_model_HR = vae_model.to(self.device)
-        self.vae_model = vae_model.to(self.device)
+        if vae_model:
+            self.vae_model = vae_model.to(self.device)
 
         # epoch_run is used by _save_snapshot and _load_snapshot to keep track of the current epoch
         self.epochs_run = 0
         # If a snapshot exists, we load it
-        if os.path.exists(snapshot_path):
-            print("Loading snapshot")
-            self._load_snapshot()
+        if snapshot_path:
+            if os.path.exists(snapshot_path):
+                print("Loading snapshot")
+                self._load_snapshot()
 
         # if os.path.exists(self.VAE_weight_path_LR):
         #     print(f"Loading fine-tuned VAE model LR from {self.VAE_weight_path_LR}...")
@@ -86,9 +90,10 @@ class Diffusion:
         # if os.path.exists(self.VAE_weight_path_HR):
         #     print(f"Loading fine-tuned VAE model HR from {self.VAE_weight_path_HR}...")
         #     self._load_snapshot_VAE(self.VAE_weight_path_HR, self.vae_model_HR)
-        if os.path.exists(self.VAE_weight_path):
-            print(f"Loading fine-tuned VAE model from {self.VAE_weight_path}...")
-            self._load_snapshot_VAE(self.VAE_weight_path, self.vae_model)
+        if VAE_weight_path:
+            if os.path.exists(self.VAE_weight_path):
+                print(f"Loading fine-tuned VAE model from {self.VAE_weight_path}...")
+                self._load_snapshot_VAE(self.VAE_weight_path, self.vae_model)
 
         self.noise_schedule = noise_schedule
 
@@ -810,6 +815,150 @@ def VAE_model_maker(device):
     vae_model = pipe.vae.to(device)
     return vae_model
 
+def VAE_finetuning(dataset_path, Degradation_type, image_size, magnification_factor, Blur_radius, num_crops, batch_size, multiple_gpus, VAE_weight_path, device):
+
+    train_loader, val_loader = dataloader_PRE_encoding_maker(dataset_path=dataset_path, Degradation_type=Degradation_type,
+                                                 image_size=image_size, magnification_factor=magnification_factor,
+                                                   Blur_radius=Blur_radius, num_crops=num_crops, batch_size=batch_size, 
+                                                     multiple_gpus=multiple_gpus)
+    vae_model = VAE_model_maker(device)
+        
+    if multiple_gpus:
+        vae_model = DDP(vae_model, device_ids=[device], find_unused_parameters=True) 
+
+
+    # VAE_weight_path_LR = os.path.join(os.curdir, 'models_run', VAE_weight_path_LR)
+    # VAE_weight_path_HR = os.path.join(os.curdir, 'models_run', VAE_weight_path_HR)
+    VAE_weight_path = os.path.join(os.curdir, 'models_run', VAE_weight_path)
+
+    diffusion = Diffusion(
+        noise_schedule=None, model=None, vae_model=vae_model,
+        snapshot_path=None,
+        # VAE_weight_path_LR=VAE_weight_path_LR,
+        # VAE_weight_path_HR=VAE_weight_path_HR,
+        VAE_weight_path=VAE_weight_path,
+        noise_steps=None, beta_start=None, beta_end=None, 
+        magnification_factor=magnification_factor,device=device,
+        image_size=image_size, model_name=None, Degradation_type=Degradation_type,
+        multiple_gpus=multiple_gpus, ema_smoothing=None)
+        
+    diffusion.fine_tuning_VAE(train_loader, epochs=10, learning_rate=1e-4)
+
+    ########## ENCODE DATASET AND SAVE IT ##########
+    encoded_images_train_save_path = os.path.join(dataset_path+'_VAE_encoded', "train_original")
+    encoded_images_val_save_path = os.path.join(dataset_path+'_VAE_encoded', "val_original")
+    if len(os.listdir(os.path.join(encoded_images_train_save_path, 'lr_img'))) == 0:
+        diffusion.encoded_dataset_VAE(dataloader=train_loader, save_path=encoded_images_train_save_path)
+        diffusion.encoded_dataset_VAE(dataloader=val_loader, save_path=encoded_images_val_save_path)
+
+    ########## RENAME IMAGES (OPTIONAL) ##########
+    # for set_path in [encoded_images_train_save_path, encoded_images_val_save_path]:
+    #     for i, img_name in tqdm(enumerate(os.listdir(os.path.join(set_path, "lr_img"))), desc='Renaming images', position=0):
+    #         if img_name.endswith('.npy'):
+    #                 os.rename(os.path.join(set_path, "lr_img", img_name), os.path.join(set_path, "lr_img", str(i+50000)+".npy"))
+    #                 os.rename(os.path.join(set_path, "hr_img", img_name), os.path.join(set_path, "hr_img", str(i+50000)+".npy"))
+
+def Diffusion_training(snapshot_folder_path, model_name, snapshot_name,
+                        noise_steps, ema_smoothing, magnification_factor,  
+                            UNet_type, input_channels, output_channels, 
+                                batch_size, image_size, multiple_gpus, 
+                                    noise_schedule, dataset_path, lr,
+                                     epochs,check_preds_epoch, patience,
+                                      loss, lr_scheduler, device):
+
+    os.makedirs(snapshot_folder_path, exist_ok=True)
+    os.makedirs(os.path.join(os.curdir, 'models_run', model_name, 'results'), exist_ok=True)
+
+    model = UNet_model_maker(UNet_type, input_channels, output_channels, device, image_size)
+    print("Num params: ", sum(p.numel() for p in model.parameters()))
+
+    if multiple_gpus:
+        model = DDP(model, device_ids=[device], find_unused_parameters=True)
+
+    snapshot_path = os.path.join(snapshot_folder_path, snapshot_name)
+
+    diffusion = Diffusion(
+        noise_schedule=noise_schedule, model=model, vae_model=None,
+        snapshot_path=snapshot_path,
+        # VAE_weight_path_LR=VAE_weight_path_LR,
+        # VAE_weight_path_HR=VAE_weight_path_HR,
+        VAE_weight_path=None,
+        noise_steps=noise_steps, beta_start=1e-4, beta_end=0.02, 
+        magnification_factor=magnification_factor,device=device,
+        image_size=image_size, model_name=model_name, Degradation_type=None,
+        multiple_gpus=multiple_gpus, ema_smoothing=ema_smoothing)
+        
+    encoded_images_train_save_path = os.path.join(dataset_path, "train_original")
+    encoded_images_val_save_path = os.path.join(dataset_path, "val_original")
+
+    ########## CREATE DATALOADERS FOR THE POST-ENCODING MODEL ##########
+    train_loader = dataloader_POST_encoding_maker(encoded_images_train_save_path, batch_size, multiple_gpus)
+    # val_loader = dataloader_POST_encoding_maker(encoded_images_val_save_path, batch_size, multiple_gpus)
+    val_loader = None
+    ########## TRAIN DIFFUSION MODEL ##########
+    diffusion.train(
+        lr=lr, epochs=epochs, check_preds_epoch=check_preds_epoch,
+        train_loader=train_loader, val_loader=val_loader, patience=patience, loss=loss,
+        lr_scheduler=lr_scheduler)
+    
+    if multiple_gpus:
+        destroy_process_group()
+
+def sampling_test(snapshot_folder_path, model_name, snapshot_name, UNet_type,
+              input_channels, output_channels, image_size, 
+              noise_schedule, noise_steps, magnification_factor,
+              Degradation_type, dataset_path, Blur_radius,
+              num_crops, batch_size, generate_video,
+            VAE_weight_path, device):
+    
+    model = UNet_model_maker(UNet_type, input_channels, output_channels, device, image_size)
+    print("Num params: ", sum(p.numel() for p in model.parameters()))
+
+    vae_model = VAE_model_maker(device)
+
+    snapshot_path = os.path.join(snapshot_folder_path, snapshot_name)
+
+    # VAE_weight_path_LR = os.path.join(os.curdir, 'models_run', VAE_weight_path_LR)
+    # VAE_weight_path_HR = os.path.join(os.curdir, 'models_run', VAE_weight_path_HR)
+    VAE_weight_path = os.path.join(os.curdir, 'models_run', VAE_weight_path)
+
+    diffusion = Diffusion(
+        noise_schedule=noise_schedule, model=model, vae_model=vae_model,
+        snapshot_path=snapshot_path,
+        # VAE_weight_path_LR=VAE_weight_path_LR,
+        # VAE_weight_path_HR=VAE_weight_path_HR,
+        VAE_weight_path=VAE_weight_path,
+        noise_steps=noise_steps, beta_start=1e-4, beta_end=0.02, 
+        magnification_factor=magnification_factor,device=device,
+        image_size=image_size, model_name=model_name, Degradation_type=Degradation_type,
+        multiple_gpus=False, ema_smoothing=False)
+
+    train_loader, val_loader = dataloader_PRE_encoding_maker(dataset_path=dataset_path, Degradation_type=Degradation_type,
+                                                 image_size=image_size, magnification_factor=magnification_factor,
+                                                   Blur_radius=Blur_radius, num_crops=num_crops, batch_size=batch_size, 
+                                                    multiple_gpus=False)
+    ######### SAMPLING ##########
+    fig, axs = plt.subplots(5,5, figsize=(15,15))
+    for i in range(5):
+        lr_img = train_loader.dataset[i][0]
+        hr_img = train_loader.dataset[i][1]
+
+        latent_lr_img, latent_sr_img, superres_img = diffusion.sample(n=1,model=model, lr_img=lr_img, input_channels=lr_img.shape[0], generate_video=generate_video)
+
+        axs[i,0].imshow(lr_img.permute(1,2,0).detach().cpu().numpy())
+        axs[i,0].set_title('Low resolution image')
+        axs[i,1].imshow(latent_lr_img[0][:3,:,:].permute(1,2,0).detach().cpu().numpy())
+        axs[i,1].set_title('Low resolution latent')
+        axs[i,2].imshow(hr_img.permute(1,2,0).detach().cpu().numpy())
+        axs[i,2].set_title('High resolution image')
+        axs[i,3].imshow(superres_img[0].permute(1,2,0).detach().cpu().numpy())
+        axs[i,3].set_title('Super resolution image')
+        axs[i,4].imshow(latent_sr_img[0][:3,:,:].permute(1,2,0).detach().cpu().numpy())
+        axs[i,4].set_title('Super resolution latent')
+
+    plt.savefig(os.path.join(os.getcwd(), 'models_run', model_name, 'results', 'superres_results.png'))
+    # plt.savefig(os.path.join(os.getcwd(), 'superres_results.png'))
+
 def launch(args):
     '''
     This function is the main and call the training, the sampling and all the other functions in the Diffusion class.
@@ -870,11 +1019,13 @@ def launch(args):
     # VAE_weight_path_HR = args.VAE_weight_path_HR
     VAE_weight_path = args.VAE_weight_path
 
-    if Blur_radius.lower() != 'random':
-        Blur_radius = float(Blur_radius)
-        print('Using a blur radius of ', Blur_radius)
-    else:
-        print('Using random blur radius from a triangular distribution')
+    if Blur_radius:
+        if Blur_radius.lower() != 'random':
+            Blur_radius = float(Blur_radius)
+            print('Using a blur radius of ', Blur_radius)
+        else:
+            Blur_radius="random"
+            print('Using random blur radius from a triangular distribution')
 
     print(f'Using {Degradation_type} degradation')
     
@@ -886,9 +1037,6 @@ def launch(args):
     else:
         print(f'Not using EMA smoothing')
 
-    os.makedirs(snapshot_folder_path, exist_ok=True)
-    os.makedirs(os.path.join(os.curdir, 'models_run', model_name, 'results'), exist_ok=True)
-    
     if multiple_gpus:
         print('Using multiple GPUs')
         init_process_group(backend="nccl") # nccl stands for NVIDIA Collective Communication Library. It is used for distributed comunications across multiple GPUs.
@@ -898,87 +1046,25 @@ def launch(args):
         device = torch.device('cuda' if torch.cuda.is_available() else 'mps' if torch.backends.mps.is_available() else 'cpu')
         print(f'Using single GPU: {device}')
 
-    # train_loader, val_loader = dataloader_PRE_encoding_maker(dataset_path=dataset_path, Degradation_type=Degradation_type,
-    #                                              image_size=image_size, magnification_factor=magnification_factor,
-    #                                                Blur_radius=Blur_radius, num_crops=num_crops, batch_size=batch_size, 
-    #                                                 multiple_gpus=multiple_gpus)
-
-    model = UNet_model_maker(UNet_type, input_channels, output_channels, device, image_size)
-    print("Num params: ", sum(p.numel() for p in model.parameters()))
-
-    vae_model = VAE_model_maker(device)
-        
-    if multiple_gpus:
-        model = DDP(model, device_ids=[device], find_unused_parameters=True)
-        vae_model = DDP(vae_model, device_ids=[device], find_unused_parameters=True)
-
-    snapshot_path = os.path.join(snapshot_folder_path, snapshot_name)
-    # VAE_weight_path_LR = os.path.join(os.curdir, 'models_run', VAE_weight_path_LR)
-    # VAE_weight_path_HR = os.path.join(os.curdir, 'models_run', VAE_weight_path_HR)
-    VAE_weight_path = os.path.join(os.curdir, 'models_run', VAE_weight_path)
-
-    diffusion = Diffusion(
-        noise_schedule=noise_schedule, model=model, vae_model=vae_model,
-        snapshot_path=snapshot_path,
-        # VAE_weight_path_LR=VAE_weight_path_LR,
-        # VAE_weight_path_HR=VAE_weight_path_HR,
-        VAE_weight_path=VAE_weight_path,
-        noise_steps=noise_steps, beta_start=1e-4, beta_end=0.02, 
-        magnification_factor=magnification_factor,device=device,
-        image_size=image_size, model_name=model_name, Degradation_type=Degradation_type,
-        multiple_gpus=multiple_gpus, ema_smoothing=ema_smoothing)
-        
-    ########## FINE-TUNE VAE ##########
-    # diffusion.fine_tuning_VAE(train_loader, epochs=10, learning_rate=1e-4)
-
-    ########## ENCODE DATASET AND SAVE IT ##########
-    encoded_images_train_save_path = os.path.join(dataset_path+'_VAE_encoded', "train_original")
-    encoded_images_val_save_path = os.path.join(dataset_path+'_VAE_encoded', "val_original")
-    # if len(os.listdir(os.path.join(encoded_images_train_save_path, 'lr_img'))) == 0:
-    #     diffusion.encoded_dataset_VAE(dataloader=train_loader, save_path=encoded_images_train_save_path)
-    #     diffusion.encoded_dataset_VAE(dataloader=val_loader, save_path=encoded_images_val_save_path)
-
-    ########## RENAME IMAGES (OPTIONAL) ##########
-    # for set_path in [encoded_images_train_save_path, encoded_images_val_save_path]:
-    #     for i, img_name in tqdm(enumerate(os.listdir(os.path.join(set_path, "lr_img"))), desc='Renaming images', position=0):
-    #         if img_name.endswith('.npy'):
-    #                 os.rename(os.path.join(set_path, "lr_img", img_name), os.path.join(set_path, "lr_img", str(i+50000)+".npy"))
-    #                 os.rename(os.path.join(set_path, "hr_img", img_name), os.path.join(set_path, "hr_img", str(i+50000)+".npy"))
-
-    ########## CREATE DATALOADERS FOR THE POST-ENCODING MODEL ##########
-    train_loader = dataloader_POST_encoding_maker(encoded_images_train_save_path, batch_size, multiple_gpus)
-    val_loader = dataloader_POST_encoding_maker(encoded_images_val_save_path, batch_size, multiple_gpus)
+    # VAE_finetuning(dataset_path=dataset_path, Degradation_type=Degradation_type, image_size=image_size,
+    #                 magnification_factor=magnification_factor, Blur_radius=Blur_radius, num_crops=num_crops,
+    #                     batch_size=batch_size, multiple_gpus=multiple_gpus, 
+    #                         VAE_weight_path=VAE_weight_path, device=device)
     
-    ########## TRAIN DIFFUSION MODEL ##########
-    diffusion.train(
-        lr=lr, epochs=epochs, check_preds_epoch=check_preds_epoch,
-        train_loader=train_loader, val_loader=val_loader, patience=patience, loss=loss,
-        lr_scheduler=lr_scheduler)
+    Diffusion_training(snapshot_folder_path=snapshot_folder_path, model_name=model_name, snapshot_name=snapshot_name,
+                        noise_steps=noise_steps, ema_smoothing=ema_smoothing, magnification_factor=magnification_factor,  
+                            UNet_type=UNet_type, input_channels=input_channels, output_channels=output_channels, 
+                                batch_size=batch_size, image_size=image_size, multiple_gpus=multiple_gpus, 
+                                    noise_schedule=noise_schedule, dataset_path=dataset_path, lr=lr,
+                                     epochs=epochs,check_preds_epoch=check_preds_epoch, patience=patience,
+                                      loss=loss, lr_scheduler=lr_scheduler, device=device)
     
-    if multiple_gpus:
-        destroy_process_group()
-
-    ########## SAMPLING ##########
-    # fig, axs = plt.subplots(5,5, figsize=(15,15))
-    # for i in range(5):
-    #     lr_img = train_loader.dataset[i][0]
-    #     hr_img = train_loader.dataset[i][1]
-
-    #     latent_lr_img, latent_sr_img, superres_img = diffusion.sample(n=1,model=model, lr_img=lr_img, input_channels=lr_img.shape[0], generate_video=generate_video)
-
-    #     axs[i,0].imshow(lr_img.permute(1,2,0).detach().cpu().numpy())
-    #     axs[i,0].set_title('Low resolution image')
-    #     axs[i,1].imshow(latent_lr_img[0][:3,:,:].permute(1,2,0).detach().cpu().numpy())
-    #     axs[i,1].set_title('Low resolution latent')
-    #     axs[i,2].imshow(hr_img.permute(1,2,0).detach().cpu().numpy())
-    #     axs[i,2].set_title('High resolution image')
-    #     axs[i,3].imshow(superres_img[0].permute(1,2,0).detach().cpu().numpy())
-    #     axs[i,3].set_title('Super resolution image')
-    #     axs[i,4].imshow(latent_sr_img[0][:3,:,:].permute(1,2,0).detach().cpu().numpy())
-    #     axs[i,4].set_title('Super resolution latent')
-
-    # plt.savefig(os.path.join(os.getcwd(), 'models_run', model_name, 'results', 'superres_results.png'))
-    # plt.savefig(os.path.join(os.getcwd(), 'superres_results.png'))
+    # sampling_test(snapshot_folder_path=snapshot_folder_path, model_name=model_name, snapshot_name=snapshot_name, UNet_type=UNet_type,
+    #                 input_channels=input_channels, output_channels=output_channels, image_size=image_size, 
+    #                     noise_schedule=noise_schedule, noise_steps=noise_steps, magnification_factor=magnification_factor,
+    #                         Degradation_type=Degradation_type, dataset_path=dataset_path, Blur_radius=Blur_radius,
+    #                             num_crops=num_crops, batch_size=batch_size, generate_video=generate_video,
+    #                               VAE_weight_path=VAE_weight_path, device=device)
 
 
 if __name__ == '__main__':
@@ -989,31 +1075,34 @@ if __name__ == '__main__':
         return v.lower() in ("yes", "true", "t", "1")
     
     parser = argparse.ArgumentParser(description=' ')
-    parser.add_argument('--epochs', type=int, default=501)
-    parser.add_argument('--batch_size', type=int, default=32)
-    parser.add_argument('--image_size', type=int)
-    parser.add_argument('--lr', type=float, default=1e-4)
+    parser.add_argument('--epochs', type=int, default=None)
+    parser.add_argument('--batch_size', type=int, default=None)
+    parser.add_argument('--image_size', type=int, default=None)
+    parser.add_argument('--lr', type=float, default=None)
     parser.add_argument('--lr_scheduler', type=str, default=None)
-    parser.add_argument('--check_preds_epoch', type=int, default=20)
-    parser.add_argument('--noise_schedule', type=str, default='cosine')
-    parser.add_argument('--snapshot_name', type=str, default='snapshot.pt')
-    parser.add_argument('--model_name', type=str)
-    parser.add_argument('--noise_steps', type=int, default=200)
-    parser.add_argument('--patience', type=int, default=10)
+    parser.add_argument('--check_preds_epoch', type=int, default=None)
+    parser.add_argument('--noise_schedule', type=str, default=None)
+    parser.add_argument('--snapshot_name', type=str, default=None)
+    parser.add_argument('--model_name', type=str, default=None)
+    parser.add_argument('--noise_steps', type=int, default=None)
+    parser.add_argument('--patience', type=int, default=None)
     parser.add_argument('--dataset_path', type=str, default=None)
-    parser.add_argument('--inp_out_channels', type=int, default=3) # input channels must be the same of the output channels
+    parser.add_argument('--inp_out_channels', type=int, default=None) # input channels must be the same of the output channels
     parser.add_argument('--generate_video', type=str2bool, nargs='?', const=True, default=False)
     parser.add_argument('--loss', type=str, default=None)
-    parser.add_argument('--magnification_factor', type=int)
-    parser.add_argument('--UNet_type', type=str, default='Residual Attention UNet') # 'Residual Attention UNet' or 'Residual MultiHead Attention UNet' or 'Residual Vision MultiHead Attention UNet'
-    parser.add_argument('--Degradation_type', type=str, default='DownBlur') # 'BSRGAN' or 'DownBlur' or 'DownBlurNoise'
-    parser.add_argument('--num_crops', type=int, default=1)
+    parser.add_argument('--magnification_factor', type=int, default=None)
+    parser.add_argument('--UNet_type', type=str, default=None) # 'Residual Attention UNet' or 'Residual MultiHead Attention UNet' or 'Residual Vision MultiHead Attention UNet'
+    parser.add_argument('--Degradation_type', type=str, default=None) # 'BSRGAN' or 'DownBlur' or 'DownBlurNoise'
+    parser.add_argument('--num_crops', type=int, default=None)
     parser.add_argument('--multiple_gpus', type=str2bool, nargs='?', const=True, default=False)
     parser.add_argument('--ema_smoothing', type=str2bool, nargs='?', const=True, default=False)
-    parser.add_argument('--Blur_radius', type=str, default='random')
+    parser.add_argument('--Blur_radius', type=str, default=None)
     # parser.add_argument('--VAE_weight_path_LR', type=str, default=None)
     # parser.add_argument('--VAE_weight_path_HR', type=str, default=None)
     parser.add_argument('--VAE_weight_path', type=str, default=None)
     args = parser.parse_args()
-    args.snapshot_folder_path = os.path.join(os.curdir, 'models_run', args.model_name, 'weights')
+    if args.model_name:
+        args.snapshot_folder_path = os.path.join(os.curdir, 'models_run', args.model_name, 'weights')
+    else:
+        args.snapshot_folder_path = None
     launch(args)
