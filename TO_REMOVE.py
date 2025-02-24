@@ -444,3 +444,28 @@ axs[4].set_title('Super Resolution Latent')
 plt.show()
 
 # %%
+import rasterio
+import numpy as np
+import matplotlib.pyplot as plt
+
+# Open the JP2 file
+# data_path = r"IMG_DATA\R60m\T33TVF_20250205T095231_B02_60m.jp2"
+# data_path = r"IMG_DATA\R20m\T33TVF_20250205T095231_B02_20m.jp2"
+# data_path = r"IMG_DATA\R10m\T33TVF_20250205T095231_B02_10m.jp2"
+def normalization(channel, max_value=1):
+    return ((channel-np.min(channel))/(np.max(channel)-np.min(channel)))*max_value
+
+blue_channel_20m = rasterio.open(r"IMG_DATA\R20m\T33TVF_20250205T095231_B02_20m.jp2").read(1)[:,:, None]
+green_channel_20m = rasterio.open(r"IMG_DATA\R20m\T33TVF_20250205T095231_B03_20m.jp2").read(1)[:,:, None]
+red_channel_20m = rasterio.open(r"IMG_DATA\R20m\T33TVF_20250205T095231_B04_20m.jp2").read(1)[:,:, None]
+
+
+rgb_20m = normalization(np.concatenate([red_channel_20m, green_channel_20m, blue_channel_20m], axis=2))
+rgb_20m = rgb_20m[:4096, :4096,:]
+
+# Display the image
+plt.imshow(rgb_20m)
+plt.title("Sentinel-2 RGB")
+plt.show()
+
+# %%

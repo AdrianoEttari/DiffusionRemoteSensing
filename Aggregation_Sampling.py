@@ -5,6 +5,8 @@ import matplotlib.pyplot as plt
 import torch
 from numpy import pi, exp, sqrt
 from tqdm import tqdm 
+from diffusers import StableDiffusionPipeline
+from UNet_model_superres_VMHA import Residual_Attention_UNet_superres
 
 class split_aggregation_sampling:
     def __init__(self, img_lr, patch_size, stride, magnification_factor, device='cpu'):
@@ -92,7 +94,7 @@ class split_aggregation_sampling:
         pixel_count = torch.zeros([batch_size, channels, height*magnification_factor, width*magnification_factor], dtype=img_lr.dtype, device=self.device)
 
         for i in tqdm(range(len(self.patches_lr))):
-            patch_sr = self.diffusion_model.sample(1, self.model, self.patches_lr[i].squeeze(0).to(self.device), input_channels=3, generate_video=False)
+            latent_patch_lr, latent_patch_sr, patch_sr = self.diffusion_model.sample(1, self.model, self.patches_lr[i].squeeze(0).to(self.device), input_channels=3, generate_video=False)
             im_res[:, :, self.patches_sr_infos[i][0]:self.patches_sr_infos[i][1], self.patches_sr_infos[i][2]:self.patches_sr_infos[i][3]] += patch_sr * self.weight
             pixel_count[:, :, self.patches_sr_infos[i][0]:self.patches_sr_infos[i][1], self.patches_sr_infos[i][2]:self.patches_sr_infos[i][3]] += self.weight
 
@@ -137,21 +139,27 @@ class split_aggregation_sampling:
             weights = torch.tensor(np.outer(y_probs, x_probs)).to(torch.float32).to(self.device)
             return torch.tile(weights, (nbatches, 3, 1, 1))
 
+def VAE_model_maker(device):
+    vae_model_path = "CompVis/stable-diffusion-v1-4"
+    pipe = StableDiffusionPipeline.from_pretrained(vae_model_path)
+    vae_model = pipe.vae
+    vae_model = pipe.vae.to(device)
+    return vae_model
+
 def launch(args):
     from PIL import Image
     from torchvision import transforms
     from torch.nn import functional as F
     import matplotlib.pyplot as plt
     from train_diffusion_superres import Diffusion
-    from UNet_model_superres import Residual_Attention_UNet_superres
     import os  
 
     snapshot_folder_path = args.snapshot_folder_path
     snapshot_name = args.snapshot_name
+    image_size = args.image_size
     magnification_factor = args.magnification_factor
     input_channels = output_channels = args.inp_out_channels
     noise_schedule = args.noise_schedule
-    device = args.device
     model_input_size = args.model_input_size
     noise_steps = args.noise_steps
     model_name = args.model_name
@@ -161,7 +169,9 @@ def launch(args):
     destination_path = args.destination_path
     img_lr_path = args.img_lr_path
     Unet_type = args.UNet_type
+    VAE_weight_path = args.VAE_weight_path
 
+    device = torch.device('cuda' if torch.cuda.is_available() else 'mps' if torch.backends.mps.is_available() else 'cpu')
     snapshot_path = os.path.join(snapshot_folder_path, snapshot_name)
 
     if Unet_type.lower() == 'residual attention unet':
@@ -169,6 +179,9 @@ def launch(args):
 
     print(f'You are using {Unet_type} model')
 
+    VAE_weight_path = os.path.join(os.curdir, 'models_run', VAE_weight_path)
+
+    vae_model = VAE_model_maker(device)
     img_lr = Image.open(img_lr_path)
     try:
         assert img_lr.size[0] == img_lr.size[1] # Image must be square
@@ -190,13 +203,22 @@ def launch(args):
     transform = transforms.Compose([transforms.ToTensor()])
     img_lr = transform(img_lr).unsqueeze(0).to(device)
         
+    # diffusion = Diffusion(
+    #     noise_schedule=noise_schedule, model=model,
+    #     snapshot_path=snapshot_path,
+    #     noise_steps=noise_steps, beta_start=1e-4, beta_end=0.02, 
+    #     magnification_factor=magnification_factor,device=device,
+    #     image_size=model_input_size, model_name=model_name, Degradation_type=Degradation_type,
+    #     multiple_gpus=False, ema_smoothing=False) # Remember that for sampling we don't care about the ema_smoothing (it is only used for training)
+
     diffusion = Diffusion(
-        noise_schedule=noise_schedule, model=model,
+        noise_schedule=noise_schedule, model=model, vae_model=vae_model,
         snapshot_path=snapshot_path,
+        VAE_weight_path=VAE_weight_path,
         noise_steps=noise_steps, beta_start=1e-4, beta_end=0.02, 
         magnification_factor=magnification_factor,device=device,
-        image_size=model_input_size, model_name=model_name, Degradation_type=Degradation_type,
-        multiple_gpus=False, ema_smoothing=False) # Remember that for sampling we don't care about the ema_smoothing (it is only used for training)
+        image_size=image_size, model_name=model_name, Degradation_type=Degradation_type,
+        multiple_gpus=False, ema_smoothing=False)
 
     aggregation_sampling = split_aggregation_sampling(img_lr, patch_size, stride, magnification_factor, device)
     final_pred = aggregation_sampling.aggregation_sampling(diffusion)
@@ -208,22 +230,26 @@ if __name__ == '__main__':
     import argparse
     import os  
     parser = argparse.ArgumentParser(description=' ')
-    parser.add_argument('--noise_schedule', type=str, default='cosine')
-    parser.add_argument('--snapshot_name', type=str, default='snapshot.pt')
-    parser.add_argument('--noise_steps', type=int, default=1500)
-    parser.add_argument('--model_input_size', type=int, default=512)
-    parser.add_argument('--model_name', type=str)
-    parser.add_argument('--UNet_type', type=str)
-    parser.add_argument('--Degradation_type', type=str)
-    parser.add_argument('--device', type=str, default='cuda')
-    parser.add_argument('--magnification_factor', type=int)
-    parser.add_argument('--inp_out_channels', type=int, default=3)
+    parser.add_argument('--noise_schedule', type=str, default=None)
+    parser.add_argument('--snapshot_name', type=str, default=None)
+    parser.add_argument('--image_size', type=int, default=None)
+    parser.add_argument('--noise_steps', type=int, default=None)
+    parser.add_argument('--model_input_size', type=int, default=None)
+    parser.add_argument('--model_name', type=str, default=None)
+    parser.add_argument('--UNet_type', type=str, default=None)
+    parser.add_argument('--Degradation_type', type=str, default=None)
+    parser.add_argument('--magnification_factor', type=int, default=None)
+    parser.add_argument('--inp_out_channels', type=int, default=None)
     parser.add_argument('--patch_size', type=int, default=64)
     parser.add_argument('--stride', type=int, default=32)
-    parser.add_argument('--destination_path', type=str)
-    parser.add_argument('--img_lr_path', type=str)
+    parser.add_argument('--destination_path', type=str, default=None)
+    parser.add_argument('--img_lr_path', type=str, default=None)
+    parser.add_argument('--VAE_weight_path', type=str, default=None)
     args = parser.parse_args()
-    args.snapshot_folder_path = os.path.join(os.curdir, 'models_run', args.model_name, 'weights')
+    if args.model_name:
+        args.snapshot_folder_path = os.path.join(os.curdir, 'models_run', args.model_name, 'weights')
+    else:
+        args.snapshot_folder_path = None
     launch(args)
 
 
