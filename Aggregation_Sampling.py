@@ -240,7 +240,7 @@ if __name__ == '__main__':
     parser.add_argument('--Degradation_type', type=str, default=None)
     parser.add_argument('--magnification_factor', type=int, default=None)
     parser.add_argument('--inp_out_channels', type=int, default=None)
-    parser.add_argument('--patch_size', type=int, default=64)
+    parser.add_argument('--patch_size', type=int, default=64) # It must be 64 because the lr_img is 4 times smaller than the hr_img
     parser.add_argument('--stride', type=int, default=32)
     parser.add_argument('--destination_path', type=str, default=None)
     parser.add_argument('--img_lr_path', type=str, default=None)
