@@ -7,7 +7,8 @@ from numpy import pi, exp, sqrt
 from tqdm import tqdm 
 from diffusers import StableDiffusionPipeline
 from UNet_model_superres_VMHA import Residual_Attention_UNet_superres
-
+from PIL import Image
+from torchvision import transforms
 class split_aggregation_sampling:
     def __init__(self, img_lr, patch_size, stride, magnification_factor, device='cpu'):
         '''
@@ -92,9 +93,15 @@ class split_aggregation_sampling:
         # obtained by dividing the sum of the weighted super-resolution patches by the pixel_count tensor.
         im_res = torch.zeros([batch_size, channels, height*magnification_factor, width*magnification_factor], dtype=img_lr.dtype, device=self.device)
         pixel_count = torch.zeros([batch_size, channels, height*magnification_factor, width*magnification_factor], dtype=img_lr.dtype, device=self.device)
-
-        for i in tqdm(range(len(self.patches_lr))):
+        os.makedirs('SR_patches_folder', exist_ok=True)
+        to_tensor = transforms.ToTensor()
+        to_pil = transforms.ToPILImage()
+        for i in tqdm(range(len(self.patches_lr)), desc="Saving SR patches"):
             latent_patch_lr, latent_patch_sr, patch_sr = self.diffusion_model.sample(1, self.model, self.patches_lr[i].squeeze(0).to(self.device), input_channels=3, generate_video=False)
+            to_pil(patch_sr[0]).save(os.path.join("SR_patches_folder", str(i)+".png"))
+
+        for i in tqdm(range(len(self.patches_lr)), desc="Collage of the patches"):
+            patch_sr = to_tensor(Image.open(os.path.join("SR_patches_folder", str(i)+".png")))
             im_res[:, :, self.patches_sr_infos[i][0]:self.patches_sr_infos[i][1], self.patches_sr_infos[i][2]:self.patches_sr_infos[i][3]] += patch_sr * self.weight
             pixel_count[:, :, self.patches_sr_infos[i][0]:self.patches_sr_infos[i][1], self.patches_sr_infos[i][2]:self.patches_sr_infos[i][3]] += self.weight
 
@@ -203,14 +210,6 @@ def launch(args):
     transform = transforms.Compose([transforms.ToTensor()])
     img_lr = transform(img_lr).unsqueeze(0).to(device)
         
-    # diffusion = Diffusion(
-    #     noise_schedule=noise_schedule, model=model,
-    #     snapshot_path=snapshot_path,
-    #     noise_steps=noise_steps, beta_start=1e-4, beta_end=0.02, 
-    #     magnification_factor=magnification_factor,device=device,
-    #     image_size=model_input_size, model_name=model_name, Degradation_type=Degradation_type,
-    #     multiple_gpus=False, ema_smoothing=False) # Remember that for sampling we don't care about the ema_smoothing (it is only used for training)
-
     diffusion = Diffusion(
         noise_schedule=noise_schedule, model=model, vae_model=vae_model,
         snapshot_path=snapshot_path,
@@ -240,7 +239,7 @@ if __name__ == '__main__':
     parser.add_argument('--Degradation_type', type=str, default=None)
     parser.add_argument('--magnification_factor', type=int, default=None)
     parser.add_argument('--inp_out_channels', type=int, default=None)
-    parser.add_argument('--patch_size', type=int, default=64) # It must be 64 because the lr_img is 4 times smaller than the hr_img
+    parser.add_argument('--patch_size', type=int, default=64) # It must be 64 because the lr_img is 4 times smaller than the hr_img that is 256 shaped
     parser.add_argument('--stride', type=int, default=32)
     parser.add_argument('--destination_path', type=str, default=None)
     parser.add_argument('--img_lr_path', type=str, default=None)
