@@ -23,6 +23,7 @@ import warnings
 import uuid
 warnings.filterwarnings("ignore", category=UserWarning)
 warnings.filterwarnings("ignore", category=FutureWarning)
+import gc
 
 from diffusers import StableDiffusionPipeline
 
@@ -187,7 +188,7 @@ class Diffusion:
         '''
         return torch.randint(low=1, high=self.noise_steps, size=(n,))
     
-    def sample(self, n, model, lr_img, input_channels=3, generate_video=False):
+    def sample(self, model, lr_img, input_channels=3, generate_video=False):
         '''
         As the name suggests this function is used for sampling. Therefore we want to 
         loop backward (moreover, notice that in the sample we want to perform EVERY STEP CONTIGUOUSLY
@@ -209,28 +210,35 @@ class Diffusion:
         self.vae_model.eval()
 
         # lr_img = transforms.Resize((self.image_size, self.image_size))(lr_img)
-        lr_img = lr_img.to(self.device).unsqueeze(0)
+        if len(lr_img.shape)==3:
+            lr_img = lr_img.to(self.device).unsqueeze(0)
+        else:
+            lr_img = lr_img.to(self.device)
+
+        batch_size = lr_img.shape[0]
 
         # lr_img = self.vae_model_LR.encode(lr_img).latent_dist.sample()
         # lr_img = self.vae_model_HR.encode(lr_img).latent_dist.sample()
         lr_img = F.interpolate(lr_img.to('cpu'), scale_factor=self.magnification_factor, mode='bicubic').to(self.device)
-        lr_img = self.vae_model.encode(lr_img).latent_dist.sample()
+
+        with torch.no_grad():
+            lr_img = self.vae_model.encode(lr_img).latent_dist.sample()
 
         frames = [] # used to store the frames if we want to generate a video
         model.eval() # disables dropout and batch normalization
         with torch.no_grad(): # disables gradient calculation
             if self.Degradation_type.lower() == 'downblur' or self.Degradation_type.lower() == 'bsrgan' or self.Degradation_type.lower() == 'downblurnoise':
                 # x = torch.randn((n, input_channels, self.image_size, self.image_size)) 
-                x = torch.randn((n, 4, self.image_size//8, self.image_size//8))
+                x = torch.randn((batch_size, 4, self.image_size//8, self.image_size//8))
             else:
                 raise ValueError('The degradation type must be either BSRGAN or DownBlur')
-            
+
             x = x.to(self.device) 
 
             x = 0.05*lr_img+0.95*x
             
             for i in tqdm(reversed(range(1, self.noise_steps)), position=0): 
-                t = (torch.ones(n) * i).long().to(self.device) # tensor of shape (n) with all the elements equal to i.
+                t = (torch.ones(batch_size) * i).long().to(self.device) # tensor of shape (n) with all the elements equal to i.
                 # Basically, each of the n image will be processed with the same integer time step t.
 
                 predicted_noise = model(x, t, lr_img, self.magnification_factor)
@@ -253,7 +261,20 @@ class Diffusion:
 
         latent_sr_img = x
         latent_lr_img = lr_img
-        sr_img = self.vae_model.decode(latent_sr_img).sample
+
+        # Delete unnecessary tensors to remove references
+        del lr_img, x, frames, predicted_noise, noise  
+
+        # Force Python garbage collection
+        gc.collect()
+
+        # Free unused GPU memory
+        torch.cuda.empty_cache()
+
+        # Perform inference without gradient tracking to save VRAM
+        with torch.no_grad():
+            sr_img = self.vae_model.decode(latent_sr_img).sample
+            
         model.train() # enables dropout and batch normalization
         return latent_lr_img, latent_sr_img, sr_img
 
