@@ -32,7 +32,7 @@ class split_aggregation_sampling:
         self.channels = channels
 
         self.patches_lr, self.patches_sr_infos = self.patchifier(img_lr, patch_size, stride, magnification_factor)
-        self.weight = self.gaussian_weights(patch_size*magnification_factor, patch_size*magnification_factor, 1)
+        self.weight = self.gaussian_weights(patch_size*magnification_factor, patch_size*magnification_factor)
 
         self.data_loader_patches_lr = self.prepare_data_loader()
 
@@ -73,7 +73,7 @@ class split_aggregation_sampling:
 
         return patches_lr, patches_sr_infos
 
-    def aggregation_sampling(self, diffusion_model, input_channels):
+    def aggregation_sampling(self, diffusion_model):
         '''
         This function iterates over the low resolution patches in self.patches_lr for each patch it generates a super-resolution
         patch using the diffusion model. Afterwords it takes the product between the super-resolution patch and the gaussian weight
@@ -99,7 +99,7 @@ class split_aggregation_sampling:
         print(f"Generating {len(self.patches_lr)} patches")
         for i, batch_patch_lr in tqdm(enumerate(self.data_loader_patches_lr), desc="Saving patches"):
             batch_patch_lr = batch_patch_lr.to(self.device)
-            latent_patch_lr, latent_patch_sr, patch_sr = self.diffusion_model.sample(self.batch_dataloader_size, self.model, batch_patch_lr, input_channels=self.channels, generate_video=False)
+            latent_patch_lr, latent_patch_sr, patch_sr = self.diffusion_model.sample(self.batch_dataloader_size, self.model, batch_patch_lr, generate_video=False)
 
             del latent_patch_lr, latent_patch_sr
             torch.cuda.empty_cache()
@@ -112,7 +112,7 @@ class split_aggregation_sampling:
             torch.cuda.empty_cache()
 
         for i in tqdm(range(len(self.patches_lr)), desc="Collage of the patches"):
-            patch_sr = to_tensor(Image.open(os.path.join("SR_patches_folder", str(i)+".png")))
+            patch_sr = to_tensor(Image.open(os.path.join("SR_patches_folder", str(i)+".png"))).to(self.device)
             im_res[:, self.patches_sr_infos[i][0]:self.patches_sr_infos[i][1], self.patches_sr_infos[i][2]:self.patches_sr_infos[i][3]] += patch_sr * self.weight
             pixel_count[:, self.patches_sr_infos[i][0]:self.patches_sr_infos[i][1], self.patches_sr_infos[i][2]:self.patches_sr_infos[i][3]] += self.weight
 
@@ -141,7 +141,7 @@ class split_aggregation_sampling:
             y_probs = [exp(-(y-midpoint)*(y-midpoint)/(latent_height*latent_height)/(2*var)) / sqrt(2*pi*var) for y in range(latent_height)]
 
             weights = torch.tensor(np.outer(y_probs, x_probs)).to(torch.float32).to(self.device)
-            return torch.tile(weights, (3, 1, 1))
+            return torch.tile(weights, (self.channels, 1, 1))
     
     def prepare_data_loader(self,):
         dataset = get_data_patches_lr(self.patches_lr)

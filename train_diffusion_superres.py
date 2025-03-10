@@ -188,7 +188,7 @@ class Diffusion:
         '''
         return torch.randint(low=1, high=self.noise_steps, size=(n,))
     
-    def sample(self,n, model, lr_img, input_channels=3, generate_video=False):
+    def sample(self,n, model, lr_img, generate_video=False):
         '''
         As the name suggests this function is used for sampling. Therefore we want to 
         loop backward (moreover, notice that in the sample we want to perform EVERY STEP CONTIGUOUSLY
@@ -224,7 +224,6 @@ class Diffusion:
                 raise ValueError('The degradation type must be either BSRGAN or DownBlur')
 
             x = x.to(self.device) 
-
             x = 0.05*lr_img+0.95*x
 
             frames = [] if generate_video else None  # Only allocate memory if needed
