@@ -8,9 +8,11 @@ from tqdm import tqdm
 from diffusers import StableDiffusionPipeline
 from UNet_model_superres_VMHA import Residual_Attention_UNet_superres
 from PIL import Image
+from utils import get_data_patches_lr
 from torchvision import transforms
+from torch.utils.data import DataLoader
 class split_aggregation_sampling:
-    def __init__(self, img_lr, patch_size, stride, magnification_factor, device='cpu'):
+    def __init__(self, img_lr, patch_size, stride, batch_dataloader_size, magnification_factor, device):
         '''
         This class is used to perform a split of an image into patches (with the patchifier function)
         and also to aggregate the super-resolution of the generated patches (with the aggregation_sampling function).
@@ -20,13 +22,19 @@ class split_aggregation_sampling:
         self.img_lr = img_lr
         self.patch_size = patch_size
         self.stride = stride
+        self.batch_dataloader_size = batch_dataloader_size
         self.magnification_factor = magnification_factor
 
         self.device = device
-        batch_size, channels, height, width = img_lr.shape
+        
+        # _, channels, height, width = img_lr.shape
+        channels, height, width = img_lr.shape
+        self.channels = channels
 
         self.patches_lr, self.patches_sr_infos = self.patchifier(img_lr, patch_size, stride, magnification_factor)
-        self.weight = self.gaussian_weights(patch_size*magnification_factor, patch_size*magnification_factor, batch_size)
+        self.weight = self.gaussian_weights(patch_size*magnification_factor, patch_size*magnification_factor, 1)
+
+        self.data_loader_patches_lr = self.prepare_data_loader()
 
     def patchifier(self, img_to_split, patch_size, stride=None, magnification_factor=1):
         '''
@@ -40,7 +48,8 @@ class split_aggregation_sampling:
         if stride is None:
             stride = patch_size  # Default non-overlapping behavior
 
-        batch_size, channels, height, width = img_to_split.shape
+        # _, channels, height, width = img_to_split.shape
+        channels, height, width = img_to_split.shape
         patches_lr = []
         patches_sr_infos = []
 
@@ -62,7 +71,8 @@ class split_aggregation_sampling:
                     x_start = x
                     x_end = x+patch_size
                 if (y_start*magnification_factor, y_end*magnification_factor, x_start*magnification_factor, x_end*magnification_factor) not in patches_sr_infos:
-                    patch = img_to_split[:, :,  y_start:y_end, x_start:x_end]
+                    # patch = img_to_split[:, :,  y_start:y_end, x_start:x_end]
+                    patch = img_to_split[:,  y_start:y_end, x_start:x_end]
                     patches_lr.append(patch)
                     patches_sr_infos.append((y_start*magnification_factor, y_end*magnification_factor, x_start*magnification_factor, x_end*magnification_factor))
 
@@ -88,39 +98,38 @@ class split_aggregation_sampling:
         self.diffusion_model = diffusion_model
         self.model = diffusion_model.model
 
-        batch_size, channels, height, width = img_lr.shape
+        channels, height, width = img_lr.shape
         # Initialize two tensors of the same shape (super-resolution image shape). im_res will be the final image that will be
         # obtained by dividing the sum of the weighted super-resolution patches by the pixel_count tensor.
-        im_res = torch.zeros([batch_size, channels, height*magnification_factor, width*magnification_factor], dtype=img_lr.dtype, device=self.device)
-        pixel_count = torch.zeros([batch_size, channels, height*magnification_factor, width*magnification_factor], dtype=img_lr.dtype, device=self.device)
+        im_res = torch.zeros([channels, height*magnification_factor, width*magnification_factor], dtype=img_lr.dtype, device=self.device)
+        pixel_count = torch.zeros([channels, height*magnification_factor, width*magnification_factor], dtype=img_lr.dtype, device=self.device)
+
         os.makedirs('SR_patches_folder', exist_ok=True)
         to_tensor = transforms.ToTensor()
         to_pil = transforms.ToPILImage()
-        for i in tqdm(range(len(self.patches_lr)), desc="Saving SR patches"):
-            latent_patch_lr, latent_patch_sr, patch_sr = self.diffusion_model.sample(1, self.model, self.patches_lr[i].squeeze(0).to(self.device), input_channels=3, generate_video=False)
-            to_pil(patch_sr[0]).save(os.path.join("SR_patches_folder", str(i)+".png"))
+        print(f"Generating {len(self.patches_lr)} patches")
+        for i, batch_patch_lr in tqdm(enumerate(self.data_loader_patches_lr), desc="Saving patches"):
+            batch_patch_lr = batch_patch_lr.to(self.device)
+            latent_patch_lr, latent_patch_sr, patch_sr = self.diffusion_model.sample(self.batch_dataloader_size, self.model, batch_patch_lr, input_channels=self.channels, generate_video=False)
+
+            del latent_patch_lr, latent_patch_sr
+            torch.cuda.empty_cache()
+            patch_sr = patch_sr.cpu()
+
+            for j in range(len(patch_sr)):
+                to_pil(patch_sr[j]).save(os.path.join("SR_patches_folder", str(i*self.batch_dataloader_size+j)+".png"))
+
+            del patch_sr
+            torch.cuda.empty_cache()
 
         for i in tqdm(range(len(self.patches_lr)), desc="Collage of the patches"):
             patch_sr = to_tensor(Image.open(os.path.join("SR_patches_folder", str(i)+".png")))
-            im_res[:, :, self.patches_sr_infos[i][0]:self.patches_sr_infos[i][1], self.patches_sr_infos[i][2]:self.patches_sr_infos[i][3]] += patch_sr * self.weight
-            pixel_count[:, :, self.patches_sr_infos[i][0]:self.patches_sr_infos[i][1], self.patches_sr_infos[i][2]:self.patches_sr_infos[i][3]] += self.weight
-
-        
-        # plt.imshow(im_res.squeeze(0).permute(1,2,0).cpu().detach().numpy())
-        # plt.axis('off')
-        # plt.savefig('super_res_pre_ratio.png', dpi=300, bbox_inches='tight', pad_inches=0)
-
-        # plt.imshow(pixel_count.squeeze(0).permute(1,2,0).cpu().detach().numpy())
-        # plt.axis('off')
-        # plt.savefig('pixel_count.png', dpi=300, bbox_inches='tight', pad_inches=0)
+            im_res[:, self.patches_sr_infos[i][0]:self.patches_sr_infos[i][1], self.patches_sr_infos[i][2]:self.patches_sr_infos[i][3]] += patch_sr * self.weight
+            pixel_count[:, self.patches_sr_infos[i][0]:self.patches_sr_infos[i][1], self.patches_sr_infos[i][2]:self.patches_sr_infos[i][3]] += self.weight
 
         assert torch.all(pixel_count != 0)
         im_res /= pixel_count
         im_res = torch.clamp(im_res, 0, 1)
-        
-        # plt.imshow(im_res.squeeze(0).permute(1,2,0).cpu().detach().numpy())
-        # plt.axis('off')
-        # plt.savefig('super_res_post_ratio.png', dpi=300, bbox_inches='tight', pad_inches=0)
 
         return im_res
 
@@ -145,6 +154,11 @@ class split_aggregation_sampling:
 
             weights = torch.tensor(np.outer(y_probs, x_probs)).to(torch.float32).to(self.device)
             return torch.tile(weights, (nbatches, 3, 1, 1))
+    
+    def prepare_data_loader(self,):
+        dataset = get_data_patches_lr(self.patches_lr)
+        data_loader = DataLoader(dataset=dataset, batch_size=self.batch_dataloader_size, shuffle=False)
+        return data_loader
 
 def VAE_model_maker(device):
     vae_model_path = "CompVis/stable-diffusion-v1-4"
@@ -167,12 +181,13 @@ def launch(args):
     magnification_factor = args.magnification_factor
     input_channels = output_channels = args.inp_out_channels
     noise_schedule = args.noise_schedule
-    model_input_size = args.model_input_size
+    # model_input_size = args.model_input_size
     noise_steps = args.noise_steps
     model_name = args.model_name
     Degradation_type = args.Degradation_type
     patch_size = args.patch_size
     stride = args.stride
+    batch_dataloader_size = args.batch_dataloader_size
     destination_path = args.destination_path
     img_lr_path = args.img_lr_path
     Unet_type = args.UNet_type
@@ -208,7 +223,8 @@ def launch(args):
         img_lr = img_lr.resize((new_width, new_height), Image.BICUBIC)
 
     transform = transforms.Compose([transforms.ToTensor()])
-    img_lr = transform(img_lr).unsqueeze(0).to(device)
+    # img_lr = transform(img_lr).unsqueeze(0).to(device)
+    img_lr = transform(img_lr).to(device)
         
     diffusion = Diffusion(
         noise_schedule=noise_schedule, model=model, vae_model=vae_model,
@@ -219,7 +235,7 @@ def launch(args):
         image_size=image_size, model_name=model_name, Degradation_type=Degradation_type,
         multiple_gpus=False, ema_smoothing=False)
 
-    aggregation_sampling = split_aggregation_sampling(img_lr, patch_size, stride, magnification_factor, device)
+    aggregation_sampling = split_aggregation_sampling(img_lr, patch_size, stride, batch_dataloader_size, magnification_factor, device)
     final_pred = aggregation_sampling.aggregation_sampling(diffusion)
 
     final_pred = transforms.ToPILImage()(final_pred.squeeze(0).cpu())
@@ -233,7 +249,7 @@ if __name__ == '__main__':
     parser.add_argument('--snapshot_name', type=str, default=None)
     parser.add_argument('--image_size', type=int, default=None)
     parser.add_argument('--noise_steps', type=int, default=None)
-    parser.add_argument('--model_input_size', type=int, default=None)
+    # parser.add_argument('--model_input_size', type=int, default=None)
     parser.add_argument('--model_name', type=str, default=None)
     parser.add_argument('--UNet_type', type=str, default=None)
     parser.add_argument('--Degradation_type', type=str, default=None)
@@ -241,6 +257,7 @@ if __name__ == '__main__':
     parser.add_argument('--inp_out_channels', type=int, default=None)
     parser.add_argument('--patch_size', type=int, default=64) # It must be 64 because the lr_img is 4 times smaller than the hr_img that is 256 shaped
     parser.add_argument('--stride', type=int, default=32)
+    parser.add_argument('--batch_dataloader_size', type=int, default=1)
     parser.add_argument('--destination_path', type=str, default=None)
     parser.add_argument('--img_lr_path', type=str, default=None)
     parser.add_argument('--VAE_weight_path', type=str, default=None)
