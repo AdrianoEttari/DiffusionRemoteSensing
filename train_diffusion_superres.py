@@ -23,6 +23,7 @@ import warnings
 import uuid
 warnings.filterwarnings("ignore", category=UserWarning)
 warnings.filterwarnings("ignore", category=FutureWarning)
+import gc
 
 from diffusers import StableDiffusionPipeline
 
@@ -187,7 +188,7 @@ class Diffusion:
         '''
         return torch.randint(low=1, high=self.noise_steps, size=(n,))
     
-    def sample(self, n, model, lr_img, input_channels=3, generate_video=False):
+    def sample(self,n, model, lr_img, input_channels=3, generate_video=False):
         '''
         As the name suggests this function is used for sampling. Therefore we want to 
         loop backward (moreover, notice that in the sample we want to perform EVERY STEP CONTIGUOUSLY
@@ -221,7 +222,7 @@ class Diffusion:
                 x = torch.randn((n, 4, self.image_size//8, self.image_size//8), device=self.device)
             else:
                 raise ValueError('The degradation type must be either BSRGAN or DownBlur')
-            
+
             x = x.to(self.device) 
 
             x = 0.05*lr_img+0.95*x
@@ -253,12 +254,20 @@ class Diffusion:
 
         latent_sr_img = x
         latent_lr_img = lr_img
-        sr_img = self.vae_model.decode(latent_sr_img).sample
 
-        # Free GPU memory
-        del x, predicted_noise, noise, alpha, alpha_hat, beta
+        # Delete unnecessary tensors to remove references
+        del lr_img, x, frames, predicted_noise, noise  
+
+        # Force Python garbage collection
+        gc.collect()
+
+        # Free unused GPU memory
         torch.cuda.empty_cache()
 
+        # Perform inference without gradient tracking to save VRAM
+        with torch.no_grad():
+            sr_img = self.vae_model.decode(latent_sr_img).sample
+            
         model.train() # enables dropout and batch normalization
         return latent_lr_img, latent_sr_img, sr_img
 

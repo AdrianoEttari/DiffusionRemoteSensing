@@ -48,14 +48,10 @@ class split_aggregation_sampling:
         if stride is None:
             stride = patch_size  # Default non-overlapping behavior
 
-        # _, channels, height, width = img_to_split.shape
         channels, height, width = img_to_split.shape
         patches_lr = []
         patches_sr_infos = []
 
-        # fig, axs = plt.subplots(3, 3, figsize=(15,15))
-        # axs = axs.flatten()
-        # counter = 0
         for y in range(0, height + 1, stride):
             for x in range(0, width + 1, stride):
                 if y+patch_size > height:
@@ -71,20 +67,13 @@ class split_aggregation_sampling:
                     x_start = x
                     x_end = x+patch_size
                 if (y_start*magnification_factor, y_end*magnification_factor, x_start*magnification_factor, x_end*magnification_factor) not in patches_sr_infos:
-                    # patch = img_to_split[:, :,  y_start:y_end, x_start:x_end]
                     patch = img_to_split[:,  y_start:y_end, x_start:x_end]
                     patches_lr.append(patch)
                     patches_sr_infos.append((y_start*magnification_factor, y_end*magnification_factor, x_start*magnification_factor, x_end*magnification_factor))
 
-        #             axs[counter].imshow(patch.squeeze(0).permute(1,2,0).cpu().detach().numpy())
-        #             axs[counter].axis('off')
-        #             axs[counter].set_title(f'x range:({x_start}, {x_end})\ny range:({y_start}, {y_end})', fontdict={'family': 'sans-serif', 'weight': 'bold', 'size': 24})
-        #             counter += 1
-        # plt.savefig('patches.png', dpi=300, bbox_inches='tight', pad_inches=0)
-        # plt.close()
         return patches_lr, patches_sr_infos
 
-    def aggregation_sampling(self, diffusion_model):
+    def aggregation_sampling(self, diffusion_model, input_channels):
         '''
         This function iterates over the low resolution patches in self.patches_lr for each patch it generates a super-resolution
         patch using the diffusion model. Afterwords it takes the product between the super-resolution patch and the gaussian weight
@@ -130,10 +119,9 @@ class split_aggregation_sampling:
         assert torch.all(pixel_count != 0)
         im_res /= pixel_count
         im_res = torch.clamp(im_res, 0, 1)
-
         return im_res
 
-    def gaussian_weights(self, tile_width, tile_height, nbatches):
+    def gaussian_weights(self, tile_width, tile_height):
             """
             Generates a gaussian mask of weights for tile contributions
             
@@ -153,7 +141,7 @@ class split_aggregation_sampling:
             y_probs = [exp(-(y-midpoint)*(y-midpoint)/(latent_height*latent_height)/(2*var)) / sqrt(2*pi*var) for y in range(latent_height)]
 
             weights = torch.tensor(np.outer(y_probs, x_probs)).to(torch.float32).to(self.device)
-            return torch.tile(weights, (nbatches, 3, 1, 1))
+            return torch.tile(weights, (3, 1, 1))
     
     def prepare_data_loader(self,):
         dataset = get_data_patches_lr(self.patches_lr)
@@ -178,6 +166,7 @@ def launch(args):
     snapshot_folder_path = args.snapshot_folder_path
     snapshot_name = args.snapshot_name
     image_size = args.image_size
+    batch_size = args.batch_size
     magnification_factor = args.magnification_factor
     input_channels = output_channels = args.inp_out_channels
     noise_schedule = args.noise_schedule
@@ -238,7 +227,13 @@ def launch(args):
     aggregation_sampling = split_aggregation_sampling(img_lr, patch_size, stride, batch_dataloader_size, magnification_factor, device)
     final_pred = aggregation_sampling.aggregation_sampling(diffusion)
 
-    final_pred = transforms.ToPILImage()(final_pred.squeeze(0).cpu())
+    
+    aggregation_sampling = split_aggregation_sampling(img_lr=img_lr, patch_size=patch_size, stride=stride,
+                                                       batch_size=batch_size, magnification_factor=magnification_factor,
+                                                         device=device)
+    final_pred = aggregation_sampling.aggregation_sampling(diffusion, input_channels)
+
+    final_pred = transforms.ToPILImage()(final_pred.cpu())
     final_pred.save(destination_path)
 
 if __name__ == '__main__':
@@ -248,6 +243,7 @@ if __name__ == '__main__':
     parser.add_argument('--noise_schedule', type=str, default=None)
     parser.add_argument('--snapshot_name', type=str, default=None)
     parser.add_argument('--image_size', type=int, default=None)
+    parser.add_argument('--batch_size', type=int, default=None)
     parser.add_argument('--noise_steps', type=int, default=None)
     # parser.add_argument('--model_input_size', type=int, default=None)
     parser.add_argument('--model_name', type=str, default=None)

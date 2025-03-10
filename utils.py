@@ -280,6 +280,16 @@ class get_data_superres_PLAIN(Dataset):
 
         return lr_img, hr_img
 
+class get_data_patches_lr(Dataset):
+    def __init__(self, patches):
+        self.patches = patches
+    
+    def __len__(self):
+        return len(self.patches)
+
+    def __getitem__(self, idx):
+        return self.patches[idx]
+
 class data_organizer_superresolution():
     '''
     This class allows to organize the data inside main_folder (provided in the __init__) 
