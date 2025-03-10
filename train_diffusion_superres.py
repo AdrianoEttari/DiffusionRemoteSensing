@@ -204,56 +204,61 @@ class Diffusion:
         Output:
             x: a tensor of shape (n, input_channels, self.image_size, self.image_size) with the generated images
         '''
-        # self.vae_model_LR.eval()
-        # self.vae_model_HR.eval()
+
         self.vae_model.eval()
 
-        # lr_img = transforms.Resize((self.image_size, self.image_size))(lr_img)
-        lr_img = lr_img.to(self.device).unsqueeze(0)
+        if len(lr_img.shape) < 4:
+            lr_img = lr_img.unsqueeze(0)
 
-        # lr_img = self.vae_model_LR.encode(lr_img).latent_dist.sample()
-        # lr_img = self.vae_model_HR.encode(lr_img).latent_dist.sample()
         lr_img = F.interpolate(lr_img.to('cpu'), scale_factor=self.magnification_factor, mode='bicubic').to(self.device)
-        lr_img = self.vae_model.encode(lr_img).latent_dist.sample()
+        
+        with torch.no_grad():
+            lr_img = self.vae_model.encode(lr_img).latent_dist.sample()
 
-        frames = [] # used to store the frames if we want to generate a video
         model.eval() # disables dropout and batch normalization
         with torch.no_grad(): # disables gradient calculation
-            if self.Degradation_type.lower() == 'downblur' or self.Degradation_type.lower() == 'bsrgan' or self.Degradation_type.lower() == 'downblurnoise':
-                # x = torch.randn((n, input_channels, self.image_size, self.image_size)) 
-                x = torch.randn((n, 4, self.image_size//8, self.image_size//8))
+            if self.Degradation_type.lower() in {'downblur', 'bsrgan', 'downblurnoise'}:
+                x = torch.randn((n, 4, self.image_size//8, self.image_size//8), device=self.device)
             else:
                 raise ValueError('The degradation type must be either BSRGAN or DownBlur')
             
             x = x.to(self.device) 
 
             x = 0.05*lr_img+0.95*x
+
+            frames = [] if generate_video else None  # Only allocate memory if needed
             
+            shape_ = (n, 1, 1, 1)
             for i in tqdm(reversed(range(1, self.noise_steps)), position=0): 
-                t = (torch.ones(n) * i).long().to(self.device) # tensor of shape (n) with all the elements equal to i.
+                t = torch.full((n,), i, dtype=torch.long, device=self.device) # tensor of shape (n) with all the elements equal to i.
                 # Basically, each of the n image will be processed with the same integer time step t.
 
                 predicted_noise = model(x, t, lr_img, self.magnification_factor)
 
-                alpha = self.alpha[t][:, None, None, None]
-                alpha_hat = self.alpha_hat[t][:, None, None, None]
-                beta = self.beta[t][:, None, None, None]
-                if i > 1:
-                    # If i>1 then we add noise to the image we have sampled (remember that from x_t we sample x_{t-1}).
-                    # If i==1 we sample x_0, which is the final image we want to generate, so we don't add noise.
-                    noise = torch.randn_like(x)
-                else:
-                    noise = torch.zeros_like(x) # we don't add noise in the last time step because it would just make the final outcome worse.
+                alpha = self.alpha[t].view(shape_)
+                alpha_hat = self.alpha_hat[t].view(shape_)
+                beta = self.beta[t].view(shape_)
+
+                # If i>1 then we add noise to the image we have sampled (remember that from x_t we sample x_{t-1}).
+                # If i==1 we sample x_0, which is the final image we want to generate, so we don't add noise.
+                noise = torch.randn_like(x) if i > 1 else torch.zeros_like(x)
+
                 x = 1 / torch.sqrt(alpha) * (x - ((1 - alpha) / (torch.sqrt(1 - alpha_hat))) * predicted_noise) + torch.sqrt(beta) * noise
-                if generate_video == True:
-                    frames.append(x)
-        if generate_video == True:
+                if generate_video:
+                    frames.append(x.clone().detach().cpu())
+
+        if generate_video:
             video_maker(frames, os.path.join(os.getcwd(), 'models_run', self.model_name, 'results', 'video_denoising.mp4'), 100)
-        # x = self.vae_model_HR.decode(x).sample
+            del frames
 
         latent_sr_img = x
         latent_lr_img = lr_img
         sr_img = self.vae_model.decode(latent_sr_img).sample
+
+        # Free GPU memory
+        del x, predicted_noise, noise, alpha, alpha_hat, beta
+        torch.cuda.empty_cache()
+
         model.train() # enables dropout and batch normalization
         return latent_lr_img, latent_sr_img, sr_img
 
@@ -1097,8 +1102,6 @@ if __name__ == '__main__':
     parser.add_argument('--multiple_gpus', type=str2bool, nargs='?', const=True, default=False)
     parser.add_argument('--ema_smoothing', type=str2bool, nargs='?', const=True, default=False)
     parser.add_argument('--Blur_radius', type=str, default=None)
-    # parser.add_argument('--VAE_weight_path_LR', type=str, default=None)
-    # parser.add_argument('--VAE_weight_path_HR', type=str, default=None)
     parser.add_argument('--VAE_weight_path', type=str, default=None)
     args = parser.parse_args()
     if args.model_name:

@@ -471,6 +471,16 @@ def calculate_entropy(bottleneck):
     # Return the average entropy across the batch
     return torch.mean(entropy)
     
+class get_data_patches_lr(Dataset):
+    def __init__(self, patches):
+        self.patches = patches
+    
+    def __len__(self):
+        return len(self.patches)
+
+    def __getitem__(self, idx):
+        return self.patches[idx]
+
 class CosineAnnealingWarmupRestarts(_LRScheduler):
     """
         optimizer (Optimizer): Wrapped optimizer.
