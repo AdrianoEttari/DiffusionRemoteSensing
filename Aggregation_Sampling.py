@@ -227,12 +227,6 @@ def launch(args):
     aggregation_sampling = split_aggregation_sampling(img_lr, patch_size, stride, batch_dataloader_size, magnification_factor, device)
     final_pred = aggregation_sampling.aggregation_sampling(diffusion)
 
-    
-    aggregation_sampling = split_aggregation_sampling(img_lr=img_lr, patch_size=patch_size, stride=stride,
-                                                       batch_size=batch_size, magnification_factor=magnification_factor,
-                                                         device=device)
-    final_pred = aggregation_sampling.aggregation_sampling(diffusion, input_channels)
-
     final_pred = transforms.ToPILImage()(final_pred.cpu())
     final_pred.save(destination_path)
 
