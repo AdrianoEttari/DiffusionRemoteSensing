@@ -25,7 +25,7 @@ warnings.filterwarnings("ignore", category=UserWarning)
 warnings.filterwarnings("ignore", category=FutureWarning)
 import gc
 
-from diffusers import StableDiffusionPipeline
+from diffusers import StableDiffusionPipeline, UNet2DConditionModel
 
 class Diffusion:
     def __init__(
@@ -424,12 +424,15 @@ class Diffusion:
                     reconstructed_hr = self.vae_model.decode(latents_hr).sample
                         
                 loss = loss_fn(x_LR=lr_images, x_HR=hr_images, latents_lr=latents_lr, latents_hr=latents_hr, reconstructed_lr=reconstructed_lr, reconstructed_hr=reconstructed_hr)
-                if lr_images.shape[0] < 8: # gradient accumulation
+                # gradient accumulation 
+                if lr_images.shape[0] < 8: # If the batch size is smaller than 8 then use gradient accumulation
                     loss = loss/4
+
                 loss.backward()
                 total_loss += loss.item()
 
-                if lr_images.shape[0] < 8: # gradient accumulation
+                # gradient accumulation
+                if lr_images.shape[0] < 8: # If the batch size is smaller than 8 then use gradient accumulation
                     if (i+1) % 4 == 0:
                         optimizer.step()
                         optimizer.zero_grad()
@@ -638,6 +641,166 @@ class Diffusion:
                 if self.early_stopping(patience, epochs_without_improving):
                     break
             print('Epochs without improving: ', epochs_without_improving)
+    
+    def fine_tuning_UNet(self, lr, epochs, check_preds_epoch, train_loader, val_loader, patience, loss, lr_scheduler=None):
+        '''
+        This function performs the training of the model, saves the snapshots and the model at the end of the training each self.every_n_epochs epochs.
+
+        Input:
+            lr: the learning rate
+            epochs: the number of epochs
+            check_preds_epoch: specifies the frequency, in terms of epochs, at which the model will perform predictions and save them. Moreover,
+                if val_loader=None then the weights of the model will be saved at this frequency.
+            train_loader: the training loader
+            val_loader: the validation loader
+            patience: the number of epochs after which the training will be stopped if the validation loss is increasing
+            loss: the loss function to use
+            lr_scheduler: the learning rate scheduler
+        '''
+        model_path = "CompVis/stable-diffusion-v1-4"
+        model = UNet2DConditionModel.from_pretrained(model_path, subfolder="unet").to(self.device)
+
+        optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+        # optimizer = torch.optim.AdamW(model.parameters(), lr=lr) # AdamW is a variant of Adam that adds weight decay (L2 regularization)
+        # Basically, weight decay is a regularization technique that penalizes large weights. It's a way to prevent overfitting. In AdamW, 
+        # the weight decay is added to the gradient and not to the weights. This is because the weights are updated in a different way in AdamW.
+
+        if self.ema_smoothing:
+            ema = EMA(beta=0.995)
+            ema_model = copy.deepcopy(model).eval().requires_grad_(False)
+
+        if loss == 'MSE':
+            loss_function = nn.MSELoss()
+        elif loss == 'MAE':
+            loss_function = nn.L1Loss()
+        elif loss == 'Huber':
+            loss_function = nn.HuberLoss() 
+        else:
+            raise ValueError('The Loss must be either MSE or MAE or Huber')
+
+        if lr_scheduler and lr_scheduler.lower() == 'cosine':
+            scheduler = CosineAnnealingWarmupRestarts(
+                optimizer,
+                first_cycle_steps=15,
+                cycle_mult=2,
+                max_lr=lr,
+                min_lr=1e-5,
+                warmup_steps=5,
+                gamma=0.9
+            )
+
+        epochs_without_improving = 0
+        best_loss = float('inf')  
+
+        for epoch in range(self.epochs_run, epochs):
+            if self.multiple_gpus:
+                train_loader.sampler.set_epoch(epoch) # ensures that the data is shuffled in a consistent manner across multiple epochs (it is useful just for the DistributedSampler)
+
+            b_sz = len(next(iter(train_loader))[0])
+            print(f"\n\n[GPU{self.device}] Epoch {epoch} | Batchsize: {b_sz} | Steps: {len(train_loader)}")
+            
+            pbar_train = tqdm(train_loader,desc='Training', position=0)
+            if val_loader is not None:
+                pbar_val = tqdm(val_loader,desc='Validation', position=0)
+
+            running_train_loss = 0.0
+            running_val_loss = 0.0
+
+            model.train()
+            for i,(lr_img,hr_img) in enumerate(pbar_train):
+                lr_img = lr_img.to(self.device)
+                hr_img = hr_img.to(self.device)
+
+                t = self.sample_timesteps(hr_img.shape[0]).to(self.device)
+                # t is a unidimensional tensor of shape (hr_img.shape[0] that is the batch_size) with random integers from 1 to noise_steps.
+                x_t, noise = self.noise_images(hr_img, t) # get the noisy images
+
+                optimizer.zero_grad() # set the gradients to 0
+                predicted_noise = model(x_t, t, lr_img).sample
+
+                train_loss = loss_function(predicted_noise, noise)
+                
+                train_loss.backward() # compute the gradients
+                optimizer.step() # update the weights
+
+                if self.ema_smoothing:
+                    ema.step_ema(ema_model, model)
+                
+                pbar_train.set_postfix(LOSS=train_loss.item()) # set_postfix just adds a message or value displayed after the progress bar. In this case the loss of the current batch.
+            
+                running_train_loss += train_loss.item()
+
+            if lr_scheduler and lr_scheduler.lower() != 'none':
+                scheduler.step()
+
+            running_train_loss /= len(train_loader) # at the end of each epoch I want the average loss
+            print(f"Epoch {epoch}: Running Train ({loss}) {running_train_loss}; LR: {optimizer.param_groups[0]['lr']}")
+
+            # IF THERE ARE MULTIPLE GPUs, MAKE JUST THE FIRST ONE SAVE THE SNAPSHOT AND COMPUTE THE PREDICTIONS TO AVOID REDUNDANCY
+            # IN THE ELSE STATEMENT, THERE IS EXACTLY THE SAME. 
+            if self.multiple_gpus:
+                if self.device==0 and epoch % check_preds_epoch == 0:
+                    if val_loader is None: # if there is no validation loader, then we save the weights at the frequency check_preds_epoch
+                        if self.ema_smoothing:
+                            self._save_snapshot(epoch, ema_model)
+                        else:
+                            self._save_snapshot(epoch, model)
+            else:
+                if epoch % check_preds_epoch == 0:
+                    if val_loader is None: # if there is no validation loader, then we save the weights at the frequency check_preds_epoch
+                        if self.ema_smoothing:
+                            self._save_snapshot(epoch, ema_model)
+                        else:
+                            self._save_snapshot(epoch, model)
+
+            if val_loader is not None:
+                with torch.no_grad():
+                    model.eval()
+                    
+                    for (lr_img,hr_img) in pbar_val:
+                        lr_img = lr_img.to(self.device)
+                        hr_img = hr_img.to(self.device)
+
+                        t = self.sample_timesteps(hr_img.shape[0]).to(self.device) # t is a unidimensional tensor of shape (images.shape[0] that is the batch_size)with random integers from 1 to noise_steps.
+                        x_t, noise = self.noise_images(hr_img, t) # get batch_size noise images
+                        
+                        if self.ema_smoothing:
+                            predicted_noise = ema_model(x_t, t, lr_img).sample
+                            
+                        else:
+                            predicted_noise = model(x_t, t, lr_img).sample 
+                        
+                        val_loss = loss_function(predicted_noise, noise)
+
+                        pbar_val.set_postfix(LOSS=val_loss.item()) # set_postfix just adds a message or value
+                        # displayed after the progress bar. In this case the loss of the current batch.
+
+                        running_val_loss += val_loss.item()
+
+                    running_val_loss /= len(val_loader)
+                    print(f"Epoch {epoch}: Running Val loss ({loss}){running_val_loss}")
+
+                if running_val_loss < best_loss - 0:
+                    best_loss = running_val_loss
+                    epochs_without_improving = 0
+                    if self.multiple_gpus:
+                        if self.device==0:
+                            if self.ema_smoothing:
+                                self._save_snapshot(epoch, ema_model)
+                            else:
+                                self._save_snapshot(epoch, model)
+                    else:
+                        if self.ema_smoothing:
+                            self._save_snapshot(epoch, ema_model)
+                        else:
+                            self._save_snapshot(epoch, model)  
+                else:
+                    epochs_without_improving += 1
+
+                if self.early_stopping(patience, epochs_without_improving):
+                    break
+            print('Epochs without improving: ', epochs_without_improving)
+
 
 
 class CombinedLoss(nn.Module):
@@ -917,6 +1080,44 @@ def Diffusion_training(snapshot_folder_path, model_name, snapshot_name,
     if multiple_gpus:
         destroy_process_group()
 
+# def Diffusion_finetune_pretrained_UNet():
+
+    # os.makedirs(snapshot_folder_path, exist_ok=True)
+    # os.makedirs(os.path.join(os.curdir, 'models_run', model_name, 'results'), exist_ok=True)
+
+    # model = UNet_model_maker(UNet_type, input_channels, output_channels, device, image_size)
+    # print("Num params: ", sum(p.numel() for p in model.parameters()))
+
+    # if multiple_gpus:
+    #     model = DDP(model, device_ids=[device], find_unused_parameters=True)
+
+    # snapshot_path = os.path.join(snapshot_folder_path, snapshot_name)
+
+    # diffusion = Diffusion(
+    #     noise_schedule=noise_schedule, model=model, vae_model=None,
+    #     snapshot_path=snapshot_path,
+    #     VAE_weight_path=None,
+    #     noise_steps=noise_steps, beta_start=1e-4, beta_end=0.02, 
+    #     magnification_factor=magnification_factor,device=device,
+    #     image_size=image_size, model_name=model_name, Degradation_type=None,
+    #     multiple_gpus=multiple_gpus, ema_smoothing=ema_smoothing)
+        
+    # encoded_images_train_save_path = os.path.join(dataset_path, "train_original")
+    # encoded_images_val_save_path = os.path.join(dataset_path, "val_original")
+
+    # ########## CREATE DATALOADERS FOR THE POST-ENCODING MODEL ##########
+    # train_loader = dataloader_POST_encoding_maker(encoded_images_train_save_path, batch_size, multiple_gpus)
+    # # val_loader = dataloader_POST_encoding_maker(encoded_images_val_save_path, batch_size, multiple_gpus)
+    # val_loader = None
+    # ########## TRAIN DIFFUSION MODEL ##########
+    # diffusion.train(
+    #     lr=lr, epochs=epochs, check_preds_epoch=check_preds_epoch,
+    #     train_loader=train_loader, val_loader=val_loader, patience=patience, loss=loss,
+    #     lr_scheduler=lr_scheduler)
+    
+    # if multiple_gpus:
+    #     destroy_process_group()
+
 def sampling_test(snapshot_folder_path, model_name, snapshot_name, UNet_type,
               input_channels, output_channels, image_size, 
               noise_schedule, noise_steps, magnification_factor,
@@ -1064,13 +1265,13 @@ def launch(args):
     #                     batch_size=batch_size, multiple_gpus=multiple_gpus, 
     #                         VAE_weight_path=VAE_weight_path, device=device)
     
-    Diffusion_training(snapshot_folder_path=snapshot_folder_path, model_name=model_name, snapshot_name=snapshot_name,
-                        noise_steps=noise_steps, ema_smoothing=ema_smoothing, magnification_factor=magnification_factor,  
-                            UNet_type=UNet_type, input_channels=input_channels, output_channels=output_channels, 
-                                batch_size=batch_size, image_size=image_size, multiple_gpus=multiple_gpus, 
-                                    noise_schedule=noise_schedule, dataset_path=dataset_path, lr=lr,
-                                     epochs=epochs,check_preds_epoch=check_preds_epoch, patience=patience,
-                                      loss=loss, lr_scheduler=lr_scheduler, device=device)
+    # Diffusion_training(snapshot_folder_path=snapshot_folder_path, model_name=model_name, snapshot_name=snapshot_name,
+    #                     noise_steps=noise_steps, ema_smoothing=ema_smoothing, magnification_factor=magnification_factor,  
+    #                         UNet_type=UNet_type, input_channels=input_channels, output_channels=output_channels, 
+    #                             batch_size=batch_size, image_size=image_size, multiple_gpus=multiple_gpus, 
+    #                                 noise_schedule=noise_schedule, dataset_path=dataset_path, lr=lr,
+    #                                  epochs=epochs,check_preds_epoch=check_preds_epoch, patience=patience,
+    #                                   loss=loss, lr_scheduler=lr_scheduler, device=device)
     
     # sampling_test(snapshot_folder_path=snapshot_folder_path, model_name=model_name, snapshot_name=snapshot_name, UNet_type=UNet_type,
     #                 input_channels=input_channels, output_channels=output_channels, image_size=image_size, 
