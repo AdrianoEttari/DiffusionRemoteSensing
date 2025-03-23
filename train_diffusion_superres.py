@@ -10,6 +10,7 @@ import copy
 
 # from UNet_model_superres import Residual_Attention_UNet_superres, EMA
 from UNet_model_superres_VMHA import Residual_Attention_UNet_superres, Residual_VisionMultiheadAttention_UNet_superres, Residual_DiffiT_UNet_superres, EMA
+from UNet_model_superres_CrossAttention import Residual_CrossAttention_UNet_superres, EMA
 from ViT_model import ViTModel
 
 from torch.nn.parallel import DistributedDataParallel as DDP
@@ -78,6 +79,7 @@ class Diffusion:
 
         # epoch_run is used by _save_snapshot and _load_snapshot to keep track of the current epoch
         self.epochs_run = 0
+
         # If a snapshot exists, we load it
         if snapshot_path:
             if os.path.exists(snapshot_path):
@@ -642,7 +644,7 @@ class Diffusion:
                     break
             print('Epochs without improving: ', epochs_without_improving)
     
-    def fine_tuning_UNet(self, lr, epochs, check_preds_epoch, train_loader, val_loader, patience, loss, lr_scheduler=None):
+    def fine_tuning_UNet(self, model, lr, epochs, check_preds_epoch, train_loader, val_loader, patience, loss, lr_scheduler=None):
         '''
         This function performs the training of the model, saves the snapshots and the model at the end of the training each self.every_n_epochs epochs.
 
@@ -657,8 +659,6 @@ class Diffusion:
             loss: the loss function to use
             lr_scheduler: the learning rate scheduler
         '''
-        model_path = "CompVis/stable-diffusion-v1-4"
-        model = UNet2DConditionModel.from_pretrained(model_path, subfolder="unet").to(self.device)
 
         optimizer = torch.optim.Adam(model.parameters(), lr=lr)
         # optimizer = torch.optim.AdamW(model.parameters(), lr=lr) # AdamW is a variant of Adam that adds weight decay (L2 regularization)
@@ -710,13 +710,17 @@ class Diffusion:
             for i,(lr_img,hr_img) in enumerate(pbar_train):
                 lr_img = lr_img.to(self.device)
                 hr_img = hr_img.to(self.device)
+                # lr_img = F.interpolate(lr_img, size=(64, 64), mode="bilinear", align_corners=False)
+                # hr_img = F.interpolate(hr_img, size=(64, 64), mode="bilinear", align_corners=False)
+                # lr_img = lr_img.half() 
+                # hr_img = hr_img.half()
 
                 t = self.sample_timesteps(hr_img.shape[0]).to(self.device)
                 # t is a unidimensional tensor of shape (hr_img.shape[0] that is the batch_size) with random integers from 1 to noise_steps.
                 x_t, noise = self.noise_images(hr_img, t) # get the noisy images
 
                 optimizer.zero_grad() # set the gradients to 0
-                predicted_noise = model(x_t, t, lr_img).sample
+                predicted_noise = model(x_t, t, encoder_hidden_states=lr_img).sample
 
                 train_loss = loss_function(predicted_noise, noise)
                 
@@ -942,6 +946,9 @@ def UNet_model_maker(UNet_type, input_channels, output_channels, device, image_s
     if UNet_type.lower() == 'residual attention unet':
         print('Using Residual Attention UNet')
         model = Residual_Attention_UNet_superres(input_channels, output_channels, device).to(device)
+    elif UNet_type.lower() == 'residual cross attention unet':
+        print('Using Residual Cross Attention UNet')
+        model = Residual_CrossAttention_UNet_superres(input_channels, output_channels, device).to(device)
     elif UNet_type.lower() == 'residual multihead attention unet':
         print('Using Residual MultiHead Attention UNet')
         # model = Residual_MultiHeadAttention_UNet_superres(input_channels, output_channels, device).to(device)
@@ -1080,43 +1087,47 @@ def Diffusion_training(snapshot_folder_path, model_name, snapshot_name,
     if multiple_gpus:
         destroy_process_group()
 
-# def Diffusion_finetune_pretrained_UNet():
+def Diffusion_finetune_pretrained_UNet(snapshot_folder_path, model_name, snapshot_name,
+                        noise_steps, ema_smoothing, magnification_factor,  
+                                batch_size, image_size, multiple_gpus, 
+                                    noise_schedule, dataset_path, lr,
+                                     epochs,check_preds_epoch, patience,
+                                      loss, lr_scheduler, device):
 
-    # os.makedirs(snapshot_folder_path, exist_ok=True)
-    # os.makedirs(os.path.join(os.curdir, 'models_run', model_name, 'results'), exist_ok=True)
+    os.makedirs(snapshot_folder_path, exist_ok=True)
+    os.makedirs(os.path.join(os.curdir, 'models_run', model_name, 'results'), exist_ok=True)
 
-    # model = UNet_model_maker(UNet_type, input_channels, output_channels, device, image_size)
-    # print("Num params: ", sum(p.numel() for p in model.parameters()))
+    model_path = "CompVis/stable-diffusion-v1-4"
+    model = UNet2DConditionModel.from_pretrained(model_path, subfolder="unet").to(device)
 
-    # if multiple_gpus:
-    #     model = DDP(model, device_ids=[device], find_unused_parameters=True)
+    if multiple_gpus:
+        model = DDP(model, device_ids=[device], find_unused_parameters=True)
 
-    # snapshot_path = os.path.join(snapshot_folder_path, snapshot_name)
+    snapshot_path = os.path.join(snapshot_folder_path, snapshot_name)
 
-    # diffusion = Diffusion(
-    #     noise_schedule=noise_schedule, model=model, vae_model=None,
-    #     snapshot_path=snapshot_path,
-    #     VAE_weight_path=None,
-    #     noise_steps=noise_steps, beta_start=1e-4, beta_end=0.02, 
-    #     magnification_factor=magnification_factor,device=device,
-    #     image_size=image_size, model_name=model_name, Degradation_type=None,
-    #     multiple_gpus=multiple_gpus, ema_smoothing=ema_smoothing)
-        
-    # encoded_images_train_save_path = os.path.join(dataset_path, "train_original")
-    # encoded_images_val_save_path = os.path.join(dataset_path, "val_original")
+    diffusion = Diffusion(
+        noise_schedule=noise_schedule, model=model, vae_model=None,
+        snapshot_path=snapshot_path,
+        VAE_weight_path=None,
+        noise_steps=noise_steps, beta_start=1e-4, beta_end=0.02, 
+        magnification_factor=magnification_factor,device=device,
+        image_size=image_size, model_name=model_name, Degradation_type=None,
+        multiple_gpus=multiple_gpus, ema_smoothing=ema_smoothing)
 
-    # ########## CREATE DATALOADERS FOR THE POST-ENCODING MODEL ##########
-    # train_loader = dataloader_POST_encoding_maker(encoded_images_train_save_path, batch_size, multiple_gpus)
-    # # val_loader = dataloader_POST_encoding_maker(encoded_images_val_save_path, batch_size, multiple_gpus)
-    # val_loader = None
-    # ########## TRAIN DIFFUSION MODEL ##########
-    # diffusion.train(
-    #     lr=lr, epochs=epochs, check_preds_epoch=check_preds_epoch,
-    #     train_loader=train_loader, val_loader=val_loader, patience=patience, loss=loss,
-    #     lr_scheduler=lr_scheduler)
+    encoded_images_train_save_path = os.path.join(dataset_path, "train_original")
+    encoded_images_val_save_path = os.path.join(dataset_path, "val_original")
+
+    ########## CREATE DATALOADERS FOR THE POST-ENCODING MODEL ##########
+    train_loader = dataloader_POST_encoding_maker(encoded_images_train_save_path, batch_size, multiple_gpus)
+    # val_loader = dataloader_POST_encoding_maker(encoded_images_val_save_path, batch_size, multiple_gpus)
+    val_loader = None
+    ########## TRAIN DIFFUSION MODEL ##########
+    diffusion.fine_tuning_UNet(model=model, lr=lr, epochs=epochs, check_preds_epoch=check_preds_epoch,
+                                train_loader=train_loader, val_loader=val_loader, 
+                                patience=patience, loss=loss, lr_scheduler=lr_scheduler)
     
-    # if multiple_gpus:
-    #     destroy_process_group()
+    if multiple_gpus:
+        destroy_process_group()
 
 def sampling_test(snapshot_folder_path, model_name, snapshot_name, UNet_type,
               input_channels, output_channels, image_size, 
@@ -1265,13 +1276,20 @@ def launch(args):
     #                     batch_size=batch_size, multiple_gpus=multiple_gpus, 
     #                         VAE_weight_path=VAE_weight_path, device=device)
     
-    # Diffusion_training(snapshot_folder_path=snapshot_folder_path, model_name=model_name, snapshot_name=snapshot_name,
-    #                     noise_steps=noise_steps, ema_smoothing=ema_smoothing, magnification_factor=magnification_factor,  
-    #                         UNet_type=UNet_type, input_channels=input_channels, output_channels=output_channels, 
-    #                             batch_size=batch_size, image_size=image_size, multiple_gpus=multiple_gpus, 
-    #                                 noise_schedule=noise_schedule, dataset_path=dataset_path, lr=lr,
-    #                                  epochs=epochs,check_preds_epoch=check_preds_epoch, patience=patience,
-    #                                   loss=loss, lr_scheduler=lr_scheduler, device=device)
+    Diffusion_training(snapshot_folder_path=snapshot_folder_path, model_name=model_name, snapshot_name=snapshot_name,
+                        noise_steps=noise_steps, ema_smoothing=ema_smoothing, magnification_factor=magnification_factor,  
+                            UNet_type=UNet_type, input_channels=input_channels, output_channels=output_channels, 
+                                batch_size=batch_size, image_size=image_size, multiple_gpus=multiple_gpus, 
+                                    noise_schedule=noise_schedule, dataset_path=dataset_path, lr=lr,
+                                     epochs=epochs,check_preds_epoch=check_preds_epoch, patience=patience,
+                                      loss=loss, lr_scheduler=lr_scheduler, device=device)
+    
+    # Diffusion_finetune_pretrained_UNet(snapshot_folder_path, model_name, snapshot_name,
+    #                     noise_steps, ema_smoothing, magnification_factor,  
+    #                             batch_size, image_size, multiple_gpus, 
+    #                                 noise_schedule, dataset_path, lr,
+    #                                  epochs,check_preds_epoch, patience,
+    #                                   loss, lr_scheduler, device)
     
     # sampling_test(snapshot_folder_path=snapshot_folder_path, model_name=model_name, snapshot_name=snapshot_name, UNet_type=UNet_type,
     #                 input_channels=input_channels, output_channels=output_channels, image_size=image_size, 
