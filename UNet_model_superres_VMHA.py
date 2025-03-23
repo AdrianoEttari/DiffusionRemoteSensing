@@ -347,6 +347,7 @@ class Residual_Attention_UNet_superres(nn.Module):
         # UPSAMPLE LR IMAGE
         if lr_img.shape[-1] < x.shape[-1]:
             raise ValueError('The low resolution image should be already resized to the high resolution image size.')
+            # I MODIFIED THIS CODE BECAUSE WHEN TRAINING THE MODEL IN THE LATENT SPACE, THE LOW AND THE HIGH RESOLUTION IMAGES HAVE THE SAME SHAPE
             # try:
             #     upsampled_lr_img = F.interpolate(lr_img, scale_factor=magnification_factor, mode='bicubic')
             # except:
