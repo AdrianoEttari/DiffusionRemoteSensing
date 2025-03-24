@@ -89,11 +89,13 @@ class CrossAttentionBlock(nn.Module):
         V = self.value_conv(skip).view(B, -1, H * W).permute(0, 2, 1)  # (B, H*W, in_channels)
 
         # Compute attention scores
-        attn = self.softmax(torch.bmm(Q, K))  # (B, H*W, H*W)
+        attn = self.softmax(torch.bmm(Q, K))  # (B, H*W, H*W) torch.bmm performs a matrix multiplication between Q and K
 
         # Apply attention
         attn_out = torch.bmm(attn, V)  # (B, H*W, in_channels)
-        attn_out = attn_out.permute(0, 2, 1).contiguous().view(B, C, H, W)  # Reshape back
+        attn_out = attn_out.permute(0, 2, 1).contiguous().view(B, C, H, W)  # Reshape back. .contiguous() is used to ensure that
+        # the tensor is contiguous in memory (i.e. tensor’s elements are stored in a single, continuous block of memory in the order they appear).
+        # This code is needed for .view() to work properly without errors.
 
         # Scale and add residual connection
         out = self.gamma * attn_out + x
@@ -179,7 +181,11 @@ class UpConvBlock(nn.Module):
 
         self.relu = nn.ReLU(inplace=False)
         self.conv = nn.Conv2d(in_ch, out_ch, kernel_size=3, stride=1, padding='same', bias=True, device=device)
-        self.transform = nn.ConvTranspose2d(out_ch, out_ch, kernel_size=3, stride=2, padding=1, bias=True, output_padding=1, device=device)
+        # self.transform = nn. (out_ch, out_ch, kernel_size=3, stride=2, padding=1, bias=True, output_padding=1, device=device)
+        self.transform = nn.Sequential(
+            nn.Upsample(scale_factor=2, mode="bilinear", align_corners=True),
+            nn.Conv2d(out_ch, out_ch, kernel_size=3, stride=1, padding=1)
+        )
 
     def _make_te(self, dim_in, dim_out, device):
         '''
@@ -221,6 +227,28 @@ class gating_signal(nn.Module):
         x = self.batch_norm(x)
         return self.relu(x)  
     
+class PyramidPooling(nn.Module):
+    def __init__(self, in_channels, pool_sizes=[1, 2, 3, 6]):
+        super(PyramidPooling, self).__init__()
+        self.pools = nn.ModuleList([
+            nn.AdaptiveAvgPool2d(output_size=s) for s in pool_sizes
+        ])
+        self.conv = nn.Conv2d(in_channels * (len(pool_sizes) + 1), in_channels, 1, bias=False)
+
+    def forward(self, x):
+        device = x.device.type  # Get current device (MPS or GPU)
+        features = [x]
+        
+        for pool in self.pools:
+            if device == "mps":
+                pooled = pool(x.cpu())
+            else:
+                pooled = pool(x)
+            upsampled = F.interpolate(pooled.to(device), size=x.shape[2:], mode='bilinear', align_corners=False)
+            features.append(upsampled)
+
+        return self.conv(torch.cat(features, dim=1))
+        
 #########################################################################################################
 ################################### Classes to apply to Low Res image ###################################
 #########################################################################################################
@@ -301,6 +329,8 @@ class Residual_CrossAttention_UNet_superres(nn.Module):
                                         time_emb_dim=self.time_emb_dim,
                                         device=self.device)
         
+        self.pyramid_pooling = PyramidPooling(in_channels=self.down_channels[-1])
+
         # UPSAMPLE
         self.gating_signals = nn.ModuleList([
             gating_signal(self.up_channels[i], self.up_channels[i+1], self.device) \
@@ -369,6 +399,7 @@ class Residual_CrossAttention_UNet_superres(nn.Module):
         
         # UNET (BOTTLENECK)
         x = self.bottle_neck(x, t, None)
+        x = self.pyramid_pooling(x)
 
         # UNET (UPSAMPLE)
         for i, (gating_signal, attention_block, up, up_conv) in enumerate(zip(self.gating_signals,self.attention_blocks,self.ups, self.up_convs)):

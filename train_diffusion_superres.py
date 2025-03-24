@@ -72,8 +72,6 @@ class Diffusion:
         if model:
             self.model = model.to(self.device)
 
-        # self.vae_model_LR = vae_model.to(self.device)
-        # self.vae_model_HR = vae_model.to(self.device)
         if vae_model:
             self.vae_model = vae_model.to(self.device)
 
@@ -86,13 +84,6 @@ class Diffusion:
                 print("Loading snapshot")
                 self._load_snapshot()
 
-        # if os.path.exists(self.VAE_weight_path_LR):
-        #     print(f"Loading fine-tuned VAE model LR from {self.VAE_weight_path_LR}...")
-        #     self._load_snapshot_VAE(self.VAE_weight_path_LR, self.vae_model_LR)
-
-        # if os.path.exists(self.VAE_weight_path_HR):
-        #     print(f"Loading fine-tuned VAE model HR from {self.VAE_weight_path_HR}...")
-        #     self._load_snapshot_VAE(self.VAE_weight_path_HR, self.vae_model_HR)
         if VAE_weight_path:
             if os.path.exists(self.VAE_weight_path):
                 print(f"Loading fine-tuned VAE model from {self.VAE_weight_path}...")
@@ -1143,15 +1134,11 @@ def sampling_test(snapshot_folder_path, model_name, snapshot_name, UNet_type,
 
     snapshot_path = os.path.join(snapshot_folder_path, snapshot_name)
 
-    # VAE_weight_path_LR = os.path.join(os.curdir, 'models_run', VAE_weight_path_LR)
-    # VAE_weight_path_HR = os.path.join(os.curdir, 'models_run', VAE_weight_path_HR)
     VAE_weight_path = os.path.join(os.curdir, 'models_run', VAE_weight_path)
 
     diffusion = Diffusion(
         noise_schedule=noise_schedule, model=model, vae_model=vae_model,
         snapshot_path=snapshot_path,
-        # VAE_weight_path_LR=VAE_weight_path_LR,
-        # VAE_weight_path_HR=VAE_weight_path_HR,
         VAE_weight_path=VAE_weight_path,
         noise_steps=noise_steps, beta_start=1e-4, beta_end=0.02, 
         magnification_factor=magnification_factor,device=device,
@@ -1168,7 +1155,7 @@ def sampling_test(snapshot_folder_path, model_name, snapshot_name, UNet_type,
         lr_img = train_loader.dataset[i][0]
         hr_img = train_loader.dataset[i][1]
 
-        latent_lr_img, latent_sr_img, superres_img = diffusion.sample(n=1,model=model, lr_img=lr_img, input_channels=lr_img.shape[0], generate_video=generate_video)
+        latent_lr_img, latent_sr_img, superres_img = diffusion.sample(n=1,model=model, lr_img=lr_img, generate_video=generate_video)
 
         axs[i,0].imshow(lr_img.permute(1,2,0).detach().cpu().numpy())
         axs[i,0].set_title('Low resolution image')
@@ -1182,7 +1169,6 @@ def sampling_test(snapshot_folder_path, model_name, snapshot_name, UNet_type,
         axs[i,4].set_title('Super resolution latent')
 
     plt.savefig(os.path.join(os.getcwd(), 'models_run', model_name, 'results', 'superres_results.png'))
-    # plt.savefig(os.path.join(os.getcwd(), 'superres_results.png'))
 
 def launch(args):
     '''
