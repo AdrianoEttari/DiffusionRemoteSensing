@@ -1054,8 +1054,6 @@ def Diffusion_training(snapshot_folder_path, model_name, snapshot_name,
     diffusion = Diffusion(
         noise_schedule=noise_schedule, model=model, vae_model=None,
         snapshot_path=snapshot_path,
-        # VAE_weight_path_LR=VAE_weight_path_LR,
-        # VAE_weight_path_HR=VAE_weight_path_HR,
         VAE_weight_path=None,
         noise_steps=noise_steps, beta_start=1e-4, beta_end=0.02, 
         magnification_factor=magnification_factor,device=device,

@@ -51,56 +51,96 @@ class EMA:
         ema_model.load_state_dict(model.state_dict()) # we set the weights of ema_model
         # to the ones of model.
   
-class CrossAttentionBlock(nn.Module):
-    def __init__(self, in_channels, attn_channels, device):
-        """
-        Cross-Attention Block for UNet
+# class CrossAttentionBlock(nn.Module):
+#     def __init__(self, in_channels, attn_channels, device):
+#         """
+#         Cross-Attention Block for UNet
         
-        Args:
-            in_channels (int): Number of channels in the decoder input
-            attn_channels (int): Number of channels in the skip connection
-            device (str): Device to run the model on (cuda/cpu)
-        """
+#         Args:
+#             in_channels (int): Number of channels in the decoder input
+#             attn_channels (int): Number of channels in the skip connection
+#             device (str): Device to run the model on (cuda/cpu)
+#         """
+#         super().__init__()
+
+#         self.query_conv = nn.Conv2d(in_channels, attn_channels, kernel_size=1, device=device)
+#         self.key_conv = nn.Conv2d(attn_channels, attn_channels, kernel_size=1, device=device)
+#         self.value_conv = nn.Conv2d(attn_channels, in_channels, kernel_size=1, device=device)
+
+#         self.gamma = nn.Parameter(torch.zeros(1))  # Learnable scaling factor
+#         self.softmax = nn.Softmax(dim=-1)  # Softmax over spatial dimensions
+
+#     def forward(self, x, skip):
+#         """
+#         Forward pass for Cross-Attention Block
+        
+#         Args:
+#             x (torch.Tensor): Decoder feature map (Query)
+#             skip (torch.Tensor): Skip connection feature map (Key & Value)
+            
+#         Returns:
+#             torch.Tensor: Attention-enhanced feature map
+#         """
+#         B, C, H, W = x.shape
+
+#         # Transform input features
+#         Q = self.query_conv(x).view(B, -1, H * W).permute(0, 2, 1)  # (B, H*W, attn_channels)
+#         K = self.key_conv(skip).view(B, -1, H * W)  # (B, attn_channels, H*W)
+#         V = self.value_conv(skip).view(B, -1, H * W).permute(0, 2, 1)  # (B, H*W, in_channels)
+
+#         # Compute attention scores
+#         attn = self.softmax(torch.bmm(Q, K))  # (B, H*W, H*W) torch.bmm performs a matrix multiplication between Q and K
+
+#         # Apply attention
+#         import ipdb; ipdb.set_trace()
+#         attn_out = torch.bmm(attn, V)  # (B, H*W, in_channels)
+#         attn_out = attn_out.permute(0, 2, 1).contiguous().view(B, C, H, W)  # Reshape back. .contiguous() is used to ensure that
+#         # the tensor is contiguous in memory (i.e. tensor’s elements are stored in a single, continuous block of memory in the order they appear).
+#         # This code is needed for .view() to work properly without errors.
+
+#         # Scale and add residual connection
+#         out = self.gamma * attn_out + x
+
+#         return out
+
+class CrossAttentionBlock(nn.Module):
+    def __init__(self, in_channels, attn_channels, num_heads=4, device="cuda"):
         super().__init__()
+        self.num_heads = num_heads
+        self.scale = (attn_channels // num_heads) ** -0.5  
 
         self.query_conv = nn.Conv2d(in_channels, attn_channels, kernel_size=1, device=device)
         self.key_conv = nn.Conv2d(attn_channels, attn_channels, kernel_size=1, device=device)
         self.value_conv = nn.Conv2d(attn_channels, in_channels, kernel_size=1, device=device)
 
-        self.gamma = nn.Parameter(torch.zeros(1))  # Learnable scaling factor
-        self.softmax = nn.Softmax(dim=-1)  # Softmax over spatial dimensions
+        self.out_proj = nn.Conv2d(in_channels, in_channels, kernel_size=1, device=device)
+        self.gamma = nn.Parameter(torch.zeros(1))
+        self.softmax = nn.Softmax(dim=-1)
 
     def forward(self, x, skip):
-        """
-        Forward pass for Cross-Attention Block
-        
-        Args:
-            x (torch.Tensor): Decoder feature map (Query)
-            skip (torch.Tensor): Skip connection feature map (Key & Value)
-            
-        Returns:
-            torch.Tensor: Attention-enhanced feature map
-        """
+        # Compute Q, K, V
         B, C, H, W = x.shape
+        head_dim = C // self.num_heads  
 
-        # Transform input features
-        Q = self.query_conv(x).view(B, -1, H * W).permute(0, 2, 1)  # (B, H*W, attn_channels)
-        K = self.key_conv(skip).view(B, -1, H * W)  # (B, attn_channels, H*W)
-        V = self.value_conv(skip).view(B, -1, H * W).permute(0, 2, 1)  # (B, H*W, in_channels)
+        Q = self.query_conv(x).view(B, self.num_heads, head_dim, H * W).permute(0, 1, 3, 2)  
+        K = self.key_conv(skip).view(B, self.num_heads, head_dim, H * W)  
+        V = self.value_conv(skip).view(B, self.num_heads, head_dim, H * W).permute(0, 1, 3, 2)  
 
-        # Compute attention scores
-        attn = self.softmax(torch.bmm(Q, K))  # (B, H*W, H*W) torch.bmm performs a matrix multiplication between Q and K
+        # Reshape Q, K, V properly
+        B, num_heads, seq_len, head_dim = Q.shape 
+        Q = Q.reshape(B * num_heads, seq_len, head_dim)  # (B*num_heads, seq_len, head_dim)
+        K = K.reshape(B * num_heads, head_dim, seq_len)  # (B*num_heads, head_dim, seq_len)
+        V = V.reshape(B * num_heads, seq_len, head_dim)  # (B*num_heads, seq_len, head_dim)
 
-        # Apply attention
-        attn_out = torch.bmm(attn, V)  # (B, H*W, in_channels)
-        attn_out = attn_out.permute(0, 2, 1).contiguous().view(B, C, H, W)  # Reshape back. .contiguous() is used to ensure that
-        # the tensor is contiguous in memory (i.e. tensor’s elements are stored in a single, continuous block of memory in the order they appear).
-        # This code is needed for .view() to work properly without errors.
+        # Compute attention
+        attn = self.softmax(torch.bmm(Q, K) * self.scale)  # (B*num_heads, seq_len, seq_len)
+        attn_out = torch.bmm(attn, V)  # (B*num_heads, seq_len, head_dim)
 
-        # Scale and add residual connection
-        out = self.gamma * attn_out + x
+        # Reshape back
+        attn_out = attn_out.view(B, num_heads, seq_len, head_dim).permute(0, 1, 3, 2)  
+        attn_out = attn_out.contiguous().view(B, C, H, W)  # Back to original shape
 
-        return out
+        return self.gamma * self.out_proj(attn_out) + x
     
 class ResConvBlock(nn.Module):
     '''
@@ -181,7 +221,7 @@ class UpConvBlock(nn.Module):
 
         self.relu = nn.ReLU(inplace=False)
         self.conv = nn.Conv2d(in_ch, out_ch, kernel_size=3, stride=1, padding='same', bias=True, device=device)
-        # self.transform = nn. (out_ch, out_ch, kernel_size=3, stride=2, padding=1, bias=True, output_padding=1, device=device)
+        # self.transform = nn.ConvTranspose2d(out_ch, out_ch, kernel_size=3, stride=2, padding=1, bias=True, output_padding=1, device=device)
         self.transform = nn.Sequential(
             nn.Upsample(scale_factor=2, mode="bilinear", align_corners=True),
             nn.Conv2d(out_ch, out_ch, kernel_size=3, stride=1, padding=1)
@@ -329,7 +369,7 @@ class Residual_CrossAttention_UNet_superres(nn.Module):
                                         time_emb_dim=self.time_emb_dim,
                                         device=self.device)
         
-        self.pyramid_pooling = PyramidPooling(in_channels=self.down_channels[-1])
+        # self.pyramid_pooling = PyramidPooling(in_channels=self.down_channels[-1])
 
         # UPSAMPLE
         self.gating_signals = nn.ModuleList([
@@ -337,7 +377,7 @@ class Residual_CrossAttention_UNet_superres(nn.Module):
             for i in range(len(self.up_channels)-2)])
         
         self.attention_blocks = nn.ModuleList([
-            CrossAttentionBlock(self.up_channels[i+1], self.up_channels[i+1], self.device) 
+            CrossAttentionBlock(self.up_channels[i+1], self.up_channels[i+1], 8, self.device) 
             for i in range(len(self.up_channels)-2)])
         
         self.ups = nn.ModuleList([
@@ -399,7 +439,7 @@ class Residual_CrossAttention_UNet_superres(nn.Module):
         
         # UNET (BOTTLENECK)
         x = self.bottle_neck(x, t, None)
-        x = self.pyramid_pooling(x)
+        # x = self.pyramid_pooling(x)
 
         # UNET (UPSAMPLE)
         for i, (gating_signal, attention_block, up, up_conv) in enumerate(zip(self.gating_signals,self.attention_blocks,self.ups, self.up_convs)):
