@@ -332,10 +332,10 @@ class Residual_CrossAttention_UNet_superres(nn.Module):
     def __init__(self, image_channels=3, out_dim=3, device=None):
         super().__init__()
         self.image_channels = image_channels
-        self.down_channels = (16,32,64,128,256) # Note that there are 4 downsampling layers and 4 upsampling layers.
+        self.down_channels = (32,64,128,256,512) # Note that there are 4 downsampling layers and 4 upsampling layers.
         # To understand why len(self.down_channels)=5, you have to imagine that the first layer 
         # has a Conv2D(16,32), the second layer has a Conv2D(32,64) and the third layer has a Conv2D(64,128)...
-        self.up_channels = (256,128,64,32,16) # Note that the last channel is not used in the upsampling (it goes from up_channels[-2] to out_dim)
+        self.up_channels = (512,256,128,64,32) # Note that the last channel is not used in the upsampling (it goes from up_channels[-2] to out_dim)
         self.out_dim = out_dim 
         self.time_emb_dim = 100 # Refers to the number of dimensions or features used to represent time.
         self.device = device
