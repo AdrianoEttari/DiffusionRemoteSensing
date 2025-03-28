@@ -166,7 +166,6 @@ assets/Other/
 models_run/Residual_Attention_UNet_generation_CIFAR10/
 models_run/Residual_Attention_UNet_superres_EMA_magnification4_LRimgsize64_ANIME50k_DownBlur/
 models_run/Residual_Attention_UNet_superres_magnification4_LRimgsize50_CelebA50k_downblur
-up42_sentinel2_patches/
 celebA_*/
 generate_new_imgs/Cifar10/
 SAR_TO_NDVI_dataset/
@@ -177,6 +176,7 @@ geojson_files/
 models_run/
 landsat_sentinel_superres*
 Napoli_sentinel2/
+up42_sentinel2_patches*
 
 # Files
 .DS_Store

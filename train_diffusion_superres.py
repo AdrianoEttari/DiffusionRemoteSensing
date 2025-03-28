@@ -461,13 +461,9 @@ class Diffusion:
                 hr_img = hr_img.to(self.device)
                 lr_img = F.interpolate(lr_img.to('cpu'), scale_factor=self.magnification_factor, mode='bicubic').to(self.device)
                 if self.multiple_gpus:
-                    # lr_img = self.vae_model_LR.module.encode(lr_img).latent_dist.sample()
-                    # hr_img = self.vae_model_HR.module.encode(hr_img).latent_dist.sample()
                     lr_img = self.vae_model.module.encode(lr_img).latent_dist.sample()
                     hr_img = self.vae_model.module.encode(hr_img).latent_dist.sample()
                 else:
-                    # lr_img = self.vae_model_LR.encode(lr_img).latent_dist.sample()
-                    # hr_img = self.vae_model_HR.encode(hr_img).latent_dist.sample()
                     lr_img = self.vae_model.encode(lr_img).latent_dist.sample()
                     hr_img = self.vae_model.encode(hr_img).latent_dist.sample()
                 for idx in range(lr_img.shape[0]):
@@ -1000,28 +996,27 @@ def VAE_finetuning(dataset_path, Degradation_type, image_size, magnification_fac
     if multiple_gpus:
         vae_model = DDP(vae_model, device_ids=[device], find_unused_parameters=True) 
 
-
-    # VAE_weight_path_LR = os.path.join(os.curdir, 'models_run', VAE_weight_path_LR)
-    # VAE_weight_path_HR = os.path.join(os.curdir, 'models_run', VAE_weight_path_HR)
     VAE_weight_path = os.path.join(os.curdir, 'models_run', VAE_weight_path)
 
     diffusion = Diffusion(
         noise_schedule=None, model=None, vae_model=vae_model,
         snapshot_path=None,
-        # VAE_weight_path_LR=VAE_weight_path_LR,
-        # VAE_weight_path_HR=VAE_weight_path_HR,
         VAE_weight_path=VAE_weight_path,
         noise_steps=None, beta_start=None, beta_end=None, 
         magnification_factor=magnification_factor,device=device,
         image_size=image_size, model_name=None, Degradation_type=Degradation_type,
         multiple_gpus=multiple_gpus, ema_smoothing=None)
         
-    diffusion.fine_tuning_VAE(train_loader, epochs=10, learning_rate=1e-4)
+    # diffusion.fine_tuning_VAE(train_loader, epochs=10, learning_rate=1e-4)
 
     ########## ENCODE DATASET AND SAVE IT ##########
     encoded_images_train_save_path = os.path.join(dataset_path+'_VAE_encoded', "train_original")
     encoded_images_val_save_path = os.path.join(dataset_path+'_VAE_encoded', "val_original")
-    if len(os.listdir(os.path.join(encoded_images_train_save_path, 'lr_img'))) == 0:
+    if os.path.exists(os.path.join(encoded_images_train_save_path, 'lr_img')):
+        if len(os.listdir(os.path.join(encoded_images_train_save_path, 'lr_img'))) == 0:
+            diffusion.encoded_dataset_VAE(dataloader=train_loader, save_path=encoded_images_train_save_path)
+            diffusion.encoded_dataset_VAE(dataloader=val_loader, save_path=encoded_images_val_save_path)
+    else:
         diffusion.encoded_dataset_VAE(dataloader=train_loader, save_path=encoded_images_train_save_path)
         diffusion.encoded_dataset_VAE(dataloader=val_loader, save_path=encoded_images_val_save_path)
 
@@ -1224,8 +1219,6 @@ def launch(args):
     multiple_gpus = args.multiple_gpus
     ema_smoothing = args.ema_smoothing
     Blur_radius = args.Blur_radius
-    # VAE_weight_path_LR = args.VAE_weight_path_LR
-    # VAE_weight_path_HR = args.VAE_weight_path_HR
     VAE_weight_path = args.VAE_weight_path
 
     if Blur_radius:
@@ -1255,18 +1248,18 @@ def launch(args):
         device = torch.device('cuda' if torch.cuda.is_available() else 'mps' if torch.backends.mps.is_available() else 'cpu')
         print(f'Using single GPU: {device}')
 
-    # VAE_finetuning(dataset_path=dataset_path, Degradation_type=Degradation_type, image_size=image_size,
-    #                 magnification_factor=magnification_factor, Blur_radius=Blur_radius, num_crops=num_crops,
-    #                     batch_size=batch_size, multiple_gpus=multiple_gpus, 
-    #                         VAE_weight_path=VAE_weight_path, device=device)
+    VAE_finetuning(dataset_path=dataset_path, Degradation_type=Degradation_type, image_size=image_size,
+                    magnification_factor=magnification_factor, Blur_radius=Blur_radius, num_crops=num_crops,
+                        batch_size=batch_size, multiple_gpus=multiple_gpus, 
+                            VAE_weight_path=VAE_weight_path, device=device)
     
-    Diffusion_training(snapshot_folder_path=snapshot_folder_path, model_name=model_name, snapshot_name=snapshot_name,
-                        noise_steps=noise_steps, ema_smoothing=ema_smoothing, magnification_factor=magnification_factor,  
-                            UNet_type=UNet_type, input_channels=input_channels, output_channels=output_channels, 
-                                batch_size=batch_size, image_size=image_size, multiple_gpus=multiple_gpus, 
-                                    noise_schedule=noise_schedule, dataset_path=dataset_path, lr=lr,
-                                     epochs=epochs,check_preds_epoch=check_preds_epoch, patience=patience,
-                                      loss=loss, lr_scheduler=lr_scheduler, device=device)
+    # Diffusion_training(snapshot_folder_path=snapshot_folder_path, model_name=model_name, snapshot_name=snapshot_name,
+    #                     noise_steps=noise_steps, ema_smoothing=ema_smoothing, magnification_factor=magnification_factor,  
+    #                         UNet_type=UNet_type, input_channels=input_channels, output_channels=output_channels, 
+    #                             batch_size=batch_size, image_size=image_size, multiple_gpus=multiple_gpus, 
+    #                                 noise_schedule=noise_schedule, dataset_path=dataset_path, lr=lr,
+    #                                  epochs=epochs,check_preds_epoch=check_preds_epoch, patience=patience,
+    #                                   loss=loss, lr_scheduler=lr_scheduler, device=device)
     
     # Diffusion_finetune_pretrained_UNet(snapshot_folder_path, model_name, snapshot_name,
     #                     noise_steps, ema_smoothing, magnification_factor,  
