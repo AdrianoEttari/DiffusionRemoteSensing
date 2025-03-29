@@ -1248,10 +1248,10 @@ def launch(args):
         device = torch.device('cuda' if torch.cuda.is_available() else 'mps' if torch.backends.mps.is_available() else 'cpu')
         print(f'Using single GPU: {device}')
 
-    VAE_finetuning(dataset_path=dataset_path, Degradation_type=Degradation_type, image_size=image_size,
-                    magnification_factor=magnification_factor, Blur_radius=Blur_radius, num_crops=num_crops,
-                        batch_size=batch_size, multiple_gpus=multiple_gpus, 
-                            VAE_weight_path=VAE_weight_path, device=device)
+    # VAE_finetuning(dataset_path=dataset_path, Degradation_type=Degradation_type, image_size=image_size,
+    #                 magnification_factor=magnification_factor, Blur_radius=Blur_radius, num_crops=num_crops,
+    #                     batch_size=batch_size, multiple_gpus=multiple_gpus, 
+    #                         VAE_weight_path=VAE_weight_path, device=device)
     
     # Diffusion_training(snapshot_folder_path=snapshot_folder_path, model_name=model_name, snapshot_name=snapshot_name,
     #                     noise_steps=noise_steps, ema_smoothing=ema_smoothing, magnification_factor=magnification_factor,  
@@ -1268,12 +1268,12 @@ def launch(args):
     #                                  epochs,check_preds_epoch, patience,
     #                                   loss, lr_scheduler, device)
     
-    # sampling_test(snapshot_folder_path=snapshot_folder_path, model_name=model_name, snapshot_name=snapshot_name, UNet_type=UNet_type,
-    #                 input_channels=input_channels, output_channels=output_channels, image_size=image_size, 
-    #                     noise_schedule=noise_schedule, noise_steps=noise_steps, magnification_factor=magnification_factor,
-    #                         Degradation_type=Degradation_type, dataset_path=dataset_path, Blur_radius=Blur_radius,
-    #                             num_crops=num_crops, batch_size=batch_size, generate_video=generate_video,
-    #                               VAE_weight_path=VAE_weight_path, device=device)
+    sampling_test(snapshot_folder_path=snapshot_folder_path, model_name=model_name, snapshot_name=snapshot_name, UNet_type=UNet_type,
+                    input_channels=input_channels, output_channels=output_channels, image_size=image_size, 
+                        noise_schedule=noise_schedule, noise_steps=noise_steps, magnification_factor=magnification_factor,
+                            Degradation_type=Degradation_type, dataset_path=dataset_path, Blur_radius=Blur_radius,
+                                num_crops=num_crops, batch_size=batch_size, generate_video=generate_video,
+                                  VAE_weight_path=VAE_weight_path, device=device)
 
 
 if __name__ == '__main__':
