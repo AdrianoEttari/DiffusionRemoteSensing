@@ -7,6 +7,7 @@ from numpy import pi, exp, sqrt
 from tqdm import tqdm 
 from diffusers import StableDiffusionPipeline
 from UNet_model_superres_VMHA import Residual_Attention_UNet_superres
+from UNet_model_superres_CrossAttention import Residual_CrossAttention_UNet_superres, EMA
 from PIL import Image
 from utils import get_data_patches_lr
 from torchvision import transforms
@@ -179,16 +180,19 @@ def launch(args):
     batch_dataloader_size = args.batch_dataloader_size
     destination_path = args.destination_path
     img_lr_path = args.img_lr_path
-    Unet_type = args.UNet_type
+    UNet_type = args.UNet_type
     VAE_weight_path = args.VAE_weight_path
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'mps' if torch.backends.mps.is_available() else 'cpu')
     snapshot_path = os.path.join(snapshot_folder_path, snapshot_name)
 
-    if Unet_type.lower() == 'residual attention unet':
+    if UNet_type.lower() == 'residual attention unet':
         model = Residual_Attention_UNet_superres(input_channels, output_channels, device).to(device)
+    elif UNet_type.lower() == 'residual cross attention unet':
+        print('Using Residual Cross Attention UNet')
+        model = Residual_CrossAttention_UNet_superres(input_channels, output_channels, device).to(device)
 
-    print(f'You are using {Unet_type} model')
+    print(f'You are using {UNet_type} model')
 
     VAE_weight_path = os.path.join(os.curdir, 'models_run', VAE_weight_path)
 
