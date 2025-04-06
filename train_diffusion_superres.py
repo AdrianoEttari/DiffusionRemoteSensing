@@ -228,9 +228,9 @@ class Diffusion:
 
                 predicted_noise = model(x, t, lr_img, self.magnification_factor)
 
-                alpha = self.alpha[t].view(shape_)
-                alpha_hat = self.alpha_hat[t].view(shape_)
-                beta = self.beta[t].view(shape_)
+                alpha = self.alpha[t].reshape(shape_)
+                alpha_hat = self.alpha_hat[t].reshape(shape_)
+                beta = self.beta[t].reshape(shape_)
 
                 # If i>1 then we add noise to the image we have sampled (remember that from x_t we sample x_{t-1}).
                 # If i==1 we sample x_0, which is the final image we want to generate, so we don't add noise.
@@ -550,7 +550,6 @@ class Diffusion:
                 predicted_noise = model(x_t, t, lr_img, self.magnification_factor) 
 
                 train_loss = loss_function(predicted_noise, noise)
-                
                 train_loss.backward() # compute the gradients
                 optimizer.step() # update the weights
 
@@ -838,7 +837,7 @@ class PerceptualLoss(nn.Module):
 
     def _preprocess_for_vgg(self, images):
         # Assumes input images are in range [0, 1]
-        images = (images - torch.tensor([0.485, 0.456, 0.406], device=images.device).view(1, 3, 1, 1)) / torch.tensor([0.229, 0.224, 0.225], device=images.device).view(1, 3, 1, 1)
+        images = (images - torch.tensor([0.485, 0.456, 0.406], device=images.device).reshape(1, 3, 1, 1)) / torch.tensor([0.229, 0.224, 0.225], device=images.device).reshape(1, 3, 1, 1)
         return images
 
 class vae_loss(nn.Module):
@@ -1253,13 +1252,13 @@ def launch(args):
     #                     batch_size=batch_size, multiple_gpus=multiple_gpus, 
     #                         VAE_weight_path=VAE_weight_path, device=device)
     
-    # Diffusion_training(snapshot_folder_path=snapshot_folder_path, model_name=model_name, snapshot_name=snapshot_name,
-    #                     noise_steps=noise_steps, ema_smoothing=ema_smoothing, magnification_factor=magnification_factor,  
-    #                         UNet_type=UNet_type, input_channels=input_channels, output_channels=output_channels, 
-    #                             batch_size=batch_size, image_size=image_size, multiple_gpus=multiple_gpus, 
-    #                                 noise_schedule=noise_schedule, dataset_path=dataset_path, lr=lr,
-    #                                  epochs=epochs,check_preds_epoch=check_preds_epoch, patience=patience,
-    #                                   loss=loss, lr_scheduler=lr_scheduler, device=device)
+    Diffusion_training(snapshot_folder_path=snapshot_folder_path, model_name=model_name, snapshot_name=snapshot_name,
+                        noise_steps=noise_steps, ema_smoothing=ema_smoothing, magnification_factor=magnification_factor,  
+                            UNet_type=UNet_type, input_channels=input_channels, output_channels=output_channels, 
+                                batch_size=batch_size, image_size=image_size, multiple_gpus=multiple_gpus, 
+                                    noise_schedule=noise_schedule, dataset_path=dataset_path, lr=lr,
+                                     epochs=epochs,check_preds_epoch=check_preds_epoch, patience=patience,
+                                      loss=loss, lr_scheduler=lr_scheduler, device=device)
     
     # Diffusion_finetune_pretrained_UNet(snapshot_folder_path, model_name, snapshot_name,
     #                     noise_steps, ema_smoothing, magnification_factor,  
@@ -1268,12 +1267,12 @@ def launch(args):
     #                                  epochs,check_preds_epoch, patience,
     #                                   loss, lr_scheduler, device)
     
-    sampling_test(snapshot_folder_path=snapshot_folder_path, model_name=model_name, snapshot_name=snapshot_name, UNet_type=UNet_type,
-                    input_channels=input_channels, output_channels=output_channels, image_size=image_size, 
-                        noise_schedule=noise_schedule, noise_steps=noise_steps, magnification_factor=magnification_factor,
-                            Degradation_type=Degradation_type, dataset_path=dataset_path, Blur_radius=Blur_radius,
-                                num_crops=num_crops, batch_size=batch_size, generate_video=generate_video,
-                                  VAE_weight_path=VAE_weight_path, device=device)
+    # sampling_test(snapshot_folder_path=snapshot_folder_path, model_name=model_name, snapshot_name=snapshot_name, UNet_type=UNet_type,
+    #                 input_channels=input_channels, output_channels=output_channels, image_size=image_size, 
+    #                     noise_schedule=noise_schedule, noise_steps=noise_steps, magnification_factor=magnification_factor,
+    #                         Degradation_type=Degradation_type, dataset_path=dataset_path, Blur_radius=Blur_radius,
+    #                             num_crops=num_crops, batch_size=batch_size, generate_video=generate_video,
+    #                               VAE_weight_path=VAE_weight_path, device=device)
 
 
 if __name__ == '__main__':
