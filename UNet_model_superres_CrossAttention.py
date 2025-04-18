@@ -50,47 +50,6 @@ class EMA:
         ema_model.load_state_dict(model.state_dict()) # we set the weights of ema_model
         # to the ones of model.
 
-# class CrossAttentionBlock(nn.Module):
-#     def __init__(self, in_channels, attn_channels, num_heads=4, device="cuda"):
-#         super().__init__()
-#         self.num_heads = num_heads
-#         self.scale = (attn_channels // num_heads) ** -0.5  
-
-#         self.query_conv = nn.Conv2d(in_channels, attn_channels, kernel_size=1, device=device)
-#         self.key_conv = nn.Conv2d(attn_channels, attn_channels, kernel_size=1, device=device)
-#         self.value_conv = nn.Conv2d(attn_channels, in_channels, kernel_size=1, device=device)
-
-#         self.out_proj = nn.Conv2d(in_channels, in_channels, kernel_size=1, device=device)
-#         self.gamma = nn.Parameter(torch.zeros(1))
-#         self.softmax = nn.Softmax(dim=-1)
-
-#     def forward(self, x, skip):
-#         # Compute Q, K, V
-#         B, C, H, W = x.shape
-#         head_dim = C // self.num_heads  
-
-#         Q = self.query_conv(x).view(B, self.num_heads, head_dim, H * W).permute(0, 1, 3, 2)  
-#         K = self.key_conv(skip).view(B, self.num_heads, head_dim, H * W)  
-#         V = self.value_conv(skip).view(B, self.num_heads, head_dim, H * W).permute(0, 1, 3, 2)  
-
-#         # Reshape Q, K, V properly
-#         B, num_heads, seq_len, head_dim = Q.shape 
-#         Q = Q.reshape(B * num_heads, seq_len, head_dim)  # (B*num_heads, seq_len, head_dim)
-#         K = K.reshape(B * num_heads, head_dim, seq_len)  # (B*num_heads, head_dim, seq_len)
-#         V = V.reshape(B * num_heads, seq_len, head_dim)  # (B*num_heads, seq_len, head_dim)
-
-#         # Compute attention
-#         attn = self.softmax(torch.bmm(Q, K) * self.scale)  # (B*num_heads, seq_len, seq_len)
-#         attn_out = torch.bmm(attn, V)  # (B*num_heads, seq_len, head_dim)
-
-#         # Reshape back (recombining the heads into the original C channels)
-#         attn_out = attn_out.view(B, num_heads, seq_len, head_dim).permute(0, 1, 3, 2)  
-#         attn_out = attn_out.contiguous().view(B, C, H, W)  # Back to original shape
-        
-#         # self.out_proj() is equivalent to apply a linear layer like in the standard MHA
-#         return self.gamma * self.out_proj(attn_out) + x
-
-
 class FeedForward(nn.Module):
     def __init__(self, dim, hidden_dim, dropout=0.1):
         super().__init__()
