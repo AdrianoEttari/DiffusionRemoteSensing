@@ -35,8 +35,6 @@ class Diffusion:
             model: nn.Module,
             vae_model: nn.Module,
             snapshot_path: str,
-            # VAE_weight_path_LR: str,
-            # VAE_weight_path_HR: str,
             VAE_weight_path: str,
             noise_steps=1000,
             beta_start=1e-4,
