@@ -180,6 +180,7 @@ geojson_files/
 landsat_sentinel_superres*
 Napoli_sentinel2/
 up42_sentinel2_patches*
+102flowers*/
 
 # Files
 *DS_Store

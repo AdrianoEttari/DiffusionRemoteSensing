@@ -57,9 +57,6 @@ class Diffusion:
         self.magnification_factor = magnification_factor
         self.device = device
         self.multiple_gpus = multiple_gpus
-
-        # self.VAE_weight_path_LR = VAE_weight_path_LR
-        # self.VAE_weight_path_HR = VAE_weight_path_HR
         self.VAE_weight_path = VAE_weight_path
 
         self.snapshot_path = snapshot_path
@@ -1004,7 +1001,7 @@ def VAE_finetuning(dataset_path, Degradation_type, image_size, magnification_fac
         image_size=image_size, model_name=None, Degradation_type=Degradation_type,
         multiple_gpus=multiple_gpus, ema_smoothing=None)
         
-    # diffusion.fine_tuning_VAE(train_loader, epochs=10, learning_rate=1e-4)
+    diffusion.fine_tuning_VAE(train_loader, epochs=10, learning_rate=1e-4)
 
     ########## ENCODE DATASET AND SAVE IT ##########
     encoded_images_train_save_path = os.path.join(dataset_path+'_VAE_encoded', "train_original")
