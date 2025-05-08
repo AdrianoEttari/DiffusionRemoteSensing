@@ -10,7 +10,7 @@ from utils import video_maker, CosineAnnealingWarmupRestarts, dataset_maker
 import numpy as np
 import torchvision.datasets as datasets
 
-from UNet_model_generation import Residual_Attention_UNet_generation,EMA
+from generate_new_imgs.UNet_model_generation_CrossAttention import Residual_Attention_UNet_generation,EMA
 # from UNet_model_generation_VMHA import Residual_Attention_UNet_generation, Residual_DiffiT_UNet_generation, EMA
 
 import torch.nn.functional as F
@@ -190,12 +190,15 @@ class Diffusion:
             x: a tensor of shape (n, input_channels, self.image_size, self.image_size) with the generated images
         '''
 
-        frames = []
         model.eval() # disables dropout and batch normalization
         with torch.no_grad(): # disables gradient calculation
-            x = torch.randn((n, input_channels, self.image_size, self.image_size)).to(self.device)
+
+            x = torch.randn((n, input_channels, self.image_size//8, self.image_size//8)).to(self.device)
+            frames = [] if generate_video else None  # Only allocate memory if needed
+
+            shape_ = (n, 1, 1, 1)
             for i in tqdm(reversed(range(1, self.noise_steps)), position=0): 
-                t = (torch.ones(n) * i).long().to(self.device) # tensor of shape (n) with all the elements equal to i.
+                t = torch.full((n,), i, dtype=torch.long, device=self.device) # tensor of shape (n) with all the elements equal to i.
                 # Basically, each of the n image will be processed with the same integer time step t.
                 
                 predicted_noise = model(x, t, target_class).to(self.device) 
@@ -203,9 +206,10 @@ class Diffusion:
                     uncond_predicted_noise = model(x, t, None).to(self.device) 
                     predicted_noise = torch.lerp(uncond_predicted_noise, predicted_noise, cfg_scale) # Compute the formula of the CFG paper https://arxiv.org/abs/2207.12598
 
-                alpha = self.alpha[t][:, None, None, None]
-                alpha_hat = self.alpha_hat[t][:, None, None, None]
-                beta = self.beta[t][:, None, None, None]
+                alpha = self.alpha[t].reshape(shape_)
+                alpha_hat = self.alpha_hat[t].reshape(shape_)
+                beta = self.beta[t].reshape(shape_)
+
                 if i > 1:
                     # If i>1 then we add noise to the image we have sampled (remember that from x_t we sample x_{t-1}).
                     # If i==1 we sample x_0, which is the final image we want to generate, so we don't add noise.
@@ -213,12 +217,29 @@ class Diffusion:
                 else:
                     noise = torch.zeros_like(x) # we don't add noise in the last time step because it would just make the final outcome worse.
                 x = 1 / torch.sqrt(alpha) * (x - ((1 - alpha) / (torch.sqrt(1 - alpha_hat))) * predicted_noise) + torch.sqrt(beta) * noise
-                if generate_video == True:
-                    frames.append(x)
-        if generate_video == True:
+                if generate_video:
+                    frames.append(x.clone().detach().cpu())
+        if generate_video:
             video_maker(frames, os.path.join(os.getcwd(), 'models_run', self.model_name, 'results', 'video_denoising.mp4'), 100)
+            del frames
+
+        latent_img = x
+
+        # Delete unnecessary tensors to remove references
+        del x, predicted_noise, noise  
+
+        # Force Python garbage collection
+        gc.collect()
+
+        # Free unused GPU memory
+        torch.cuda.empty_cache()
+
+        # Perform inference without gradient tracking to save VRAM
+        with torch.no_grad():
+            generated_image = self.vae_model.decode(latent_img).sample
+            
         model.train() # enables dropout and batch normalization
-        return x
+        return generated_image
 
     def _save_snapshot(self, epoch, model):
         '''
@@ -360,7 +381,6 @@ class Diffusion:
                     unique_id = uuid.uuid4().hex
                     img_to_save = img[idx].permute(1,2,0).detach().cpu().numpy()
                     np.save(os.path.join(save_path, "img",  f'{unique_id}'), img_to_save)
-
 
     def train(self, lr, epochs, check_preds_epoch, train_loader, val_loader, patience, loss, lr_scheduler=None):
         '''
@@ -576,14 +596,14 @@ def dataloader_PRE_encoding_maker(dataset_path, image_size, batch_size, multiple
 
     return train_loader, num_classes
 
-def dataloader_POST_encoding_maker(dataset_path, batch_size, multiple_gpus):
-    ######### TO ADJUST ACCORDING TO THE OUTPUT OF THE VARIATIONAL AUTOENCODER (I DON'T HAVE YET THE GET_DATA)
-    dataset = get_data_superres_PLAIN(dataset_path)
+def dataloader_POST_encoding_maker(dataset_path, image_size, batch_size, multiple_gpus):
+    dataset = dataset_maker(image_size, dataset_path)
+    num_classes = len(dataset.classes)
     if multiple_gpus:
         dataloader = DataLoader(dataset=dataset, batch_size=batch_size, shuffle=False, sampler=DistributedSampler(dataset),drop_last=True)
     else:
         dataloader = DataLoader(dataset=dataset, batch_size=batch_size, shuffle=True, drop_last=True)
-    return dataloader
+    return dataloader, num_classes
 
 def VAE_model_maker(device):
     vae_model_path = "CompVis/stable-diffusion-v1-4"
@@ -639,17 +659,33 @@ def UNet_model_maker(UNet_type, input_channels, output_channels, num_classes, de
     
     return model
 
-def generation_sampling(num_rows_plot, num_classes, model, diffusion,
-                         model_name, train_loader, generate_video, device):
+def generation_sampling(noise_schedule, snapshot_folder_path, snapshot_name, VAE_weight_path, noise_steps, image_size, ema_smoothing,
+                         UNet_type, model_name, generate_video, input_channels, output_channels, num_classes=None, device='cuda'):
+    
+    model = UNet_model_maker(UNet_type, input_channels, output_channels, num_classes, device)
+
     if num_classes > 10:
         num_rows_plot = 10
     else:
         num_rows_plot = num_classes
 
+    snapshot_path = os.path.join(snapshot_folder_path, snapshot_name)
+    VAE_weight_path = os.path.join('..', 'models_run', VAE_weight_path)
+
+    vae_model = VAE_model_maker(device)
+
+    diffusion = Diffusion(
+        noise_schedule=noise_schedule, model=model, vae_model=vae_model,
+        snapshot_path=snapshot_path,
+        VAE_weight_path=VAE_weight_path,
+        noise_steps=noise_steps, beta_start=1e-4, beta_end=0.02,
+        device=device, image_size=image_size, model_name=model_name,
+        multiple_gpus=False, ema_smoothing=ema_smoothing)
+
     fig, axs = plt.subplots(num_rows_plot,5, figsize=(15,15))
 
     for i in range(num_rows_plot):
-        prediction = diffusion.sample(n=5,model=model, target_class=torch.tensor([i], dtype=torch.int64).to(device), input_channels=train_loader.dataset[0][0].shape[0], generate_video=generate_video)
+        prediction = diffusion.sample(n=5,model=model, target_class=torch.tensor([i], dtype=torch.int64).to(device), input_channels=input_channels, generate_video=generate_video)
         for j in range(5):
             axs[i,j].imshow(prediction[j].permute(1,2,0).cpu().numpy())
             axs[i,j].set_title(f'Class {i}')
@@ -657,18 +693,22 @@ def generation_sampling(num_rows_plot, num_classes, model, diffusion,
     plt.savefig(os.path.join('..', 'models_run', model_name, 'results', f'generation_results.png'))
 
 def Diffusion_training(snapshot_folder_path, model_name, snapshot_name,
-                        noise_steps, ema_smoothing, magnification_factor,  
+                        noise_steps, ema_smoothing,  
                             UNet_type, input_channels, output_channels, 
                                 batch_size, image_size, multiple_gpus, 
                                     noise_schedule, dataset_path, lr,
                                      epochs,check_preds_epoch, patience,
-                                      loss, lr_scheduler, num_classes, device):
+                                      loss, lr_scheduler, device):
 
     os.makedirs(snapshot_folder_path, exist_ok=True)
     os.makedirs(os.path.join('..', 'models_run', model_name, 'results'), exist_ok=True)
 
+    ########## CREATE DATALOADERS FOR THE POST-ENCODING MODEL ##########
+    encoded_images_train_save_path = os.path.join(dataset_path, "train_original")
+    train_loader, num_classes = dataloader_POST_encoding_maker(dataset_path=encoded_images_train_save_path, image_size=image_size, batch_size=batch_size, multiple_gpus=multiple_gpus)
+    val_loader = None
+
     model = UNet_model_maker(UNet_type, input_channels, output_channels, num_classes, device)
-    print("Num params: ", sum(p.numel() for p in model.parameters()))
 
     if multiple_gpus:
         model = DDP(model, device_ids=[device], find_unused_parameters=True)
@@ -682,16 +722,9 @@ def Diffusion_training(snapshot_folder_path, model_name, snapshot_name,
         noise_steps=noise_steps, beta_start=1e-4, beta_end=0.02,
         device=device, image_size=image_size, model_name=model_name,
         multiple_gpus=multiple_gpus, ema_smoothing=ema_smoothing)
-
-    encoded_images_train_save_path = os.path.join(dataset_path, "train_original")
-
-    ######## TO CONTINUE ########
+    
 
 
-
-    ########## CREATE DATALOADERS FOR THE POST-ENCODING MODEL ##########
-    train_loader = dataloader_POST_encoding_maker(encoded_images_train_save_path, batch_size, multiple_gpus)
-    val_loader = None
     ########## TRAIN DIFFUSION MODEL ##########
     diffusion.train(
         lr=lr, epochs=epochs, check_preds_epoch=check_preds_epoch,
@@ -769,31 +802,20 @@ def launch(args):
     if lr_scheduler and lr_scheduler.lower() != 'none':
         print(f'Using {lr_scheduler} learning rate scheduler')
 
-    VAE_finetuning(dataset_path=dataset_path, image_size=image_size,
-                        batch_size=batch_size, multiple_gpus=multiple_gpus, 
-                            VAE_weight_path=VAE_weight_path, device=device)
+    # VAE_finetuning(dataset_path=dataset_path, image_size=image_size,
+    #                     batch_size=batch_size, multiple_gpus=multiple_gpus, 
+    #                         VAE_weight_path=VAE_weight_path, device=device)
+
+    Diffusion_training(snapshot_folder_path=snapshot_folder_path, model_name=model_name, snapshot_name=snapshot_name,
+                        noise_steps=noise_steps, ema_smoothing=ema_smoothing,
+                            UNet_type=UNet_type, input_channels=input_channels, output_channels=output_channels, 
+                                batch_size=batch_size, image_size=image_size, multiple_gpus=multiple_gpus, 
+                                    noise_schedule=noise_schedule, dataset_path=dataset_path, lr=lr,
+                                     epochs=epochs,check_preds_epoch=check_preds_epoch, patience=patience,
+                                      loss=loss, lr_scheduler=lr_scheduler, device=device)
     
-    # Diffusion_training(snapshot_folder_path=snapshot_folder_path, model_name=model_name, snapshot_name=snapshot_name,
-    #                     noise_steps=noise_steps, ema_smoothing=ema_smoothing, magnification_factor=magnification_factor,  
-    #                         UNet_type=UNet_type, input_channels=input_channels, output_channels=output_channels, 
-    #                             batch_size=batch_size, image_size=image_size, multiple_gpus=multiple_gpus, 
-    #                                 noise_schedule=noise_schedule, dataset_path=dataset_path, lr=lr,
-    #                                  epochs=epochs,check_preds_epoch=check_preds_epoch, patience=patience,
-    #                                   loss=loss, lr_scheduler=lr_scheduler, device=device)
-    
-    # Diffusion_finetune_pretrained_UNet(snapshot_folder_path, model_name, snapshot_name,
-    #                     noise_steps, ema_smoothing, magnification_factor,  
-    #                             batch_size, image_size, multiple_gpus, 
-    #                                 noise_schedule, dataset_path, lr,
-    #                                  epochs,check_preds_epoch, patience,
-    #                                   loss, lr_scheduler, device)
-    
-    # sampling_test(snapshot_folder_path=snapshot_folder_path, model_name=model_name, snapshot_name=snapshot_name, UNet_type=UNet_type,
-    #                 input_channels=input_channels, output_channels=output_channels, image_size=image_size, 
-    #                     noise_schedule=noise_schedule, noise_steps=noise_steps, magnification_factor=magnification_factor,
-    #                         Degradation_type=Degradation_type, dataset_path=dataset_path, Blur_radius=Blur_radius,
-    #                             num_crops=num_crops, batch_size=batch_size, generate_video=generate_video,
-    #                               VAE_weight_path=VAE_weight_path, device=device)
+    # generation_sampling(noise_schedule, snapshot_folder_path, snapshot_name, VAE_weight_path, noise_steps, image_size, ema_smoothing,
+    #                      UNet_type, model_name, generate_video, input_channels, output_channels, num_classes=None, device='cuda')
 
 
 if __name__ == '__main__':
@@ -825,7 +847,7 @@ if __name__ == '__main__':
     parser.add_argument('--VAE_weight_path', type=str, default=None)
     args = parser.parse_args()
     if args.model_name:
-        args.snapshot_folder_path = os.path.join(os.curdir, 'models_run', args.model_name, 'weights')
+        args.snapshot_folder_path = os.path.join('..', 'models_run', args.model_name, 'weights')
     else:
         args.snapshot_folder_path = None
     launch(args)

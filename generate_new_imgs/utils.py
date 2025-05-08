@@ -8,6 +8,7 @@ from torchvision import datasets
 import os
 from torchvision import transforms
 
+
 def video_maker(frames, video_path='output.mp4', fps=50):
     '''
     Convert a sequence of frames to a video.
@@ -166,7 +167,6 @@ def get_real_to_model_classes_dict(num_classes):
 
     real_to_model_classes_dict = {idxs[i]:int(sorted_idxs[i]) for i in range(len(sorted_idxs))} 
     return real_to_model_classes_dict
-
 class CustomImageFolder(datasets.ImageFolder):
     def find_classes(self, directory):
         '''

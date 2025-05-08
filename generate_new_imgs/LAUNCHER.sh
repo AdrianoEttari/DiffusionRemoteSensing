@@ -2,7 +2,7 @@
 # model_name="TO_REMOVE_generate"
 # python3 train_diffusion_generation.py --epochs=1 --noise_schedule="cosine" --batch_size=5 --image_size=32 --lr=2e-4 --snapshot_name=snapshot.pt --model_name="$model_name" --noise_steps=2 --patience=25  --dataset_path="ImageNet256_small" --inp_out_channels=3 --loss="MSE" --UNet_type="DiffiT UNet" --multiple_gpus="False" --ema_smoothing="False" 
 
-model_name="to_remove"
+model_name="TO_REMOVE"
 
 VAE_model_name="VAE_102flowers_finetuning_gradientAccumulation"
 
@@ -11,10 +11,9 @@ dataset_path="102flowers_dataset"
 python train_diffusion_generation.py --dataset_path="$dataset_path" --image_size=512 --batch_size=1 --multiple_gpus=False --VAE_weight_path="$VAE_model_name" 
 
 ###### DIFFUSION TRAINING ######
-# dataset_path="celebA_50k_VAE_encoded"
-# python train_diffusion_superres.py --model_name="$model_name" --snapshot_name=snapshot.pt --noise_steps=10 --ema_smoothing=False --magnification_factor=4 --UNet_type="Residual Cross Attention UNet" --inp_out_channels=4 --batch_size=2 --image_size=256 --multiple_gpus=False --noise_schedule="cosine" --dataset_path="$dataset_path" --lr=1e-4 --epochs=2 --check_preds_epoch=1 --patience=25  --loss="MSE" --lr_schedule="cosine"
-# python train_diffusion_superres.py --model_name="Residual_Attention_UNet_superres_magnification4_LRimgsize64_celeb50k_patches_downblur_StableDiffusion_LRandHR_gradientAccumulation_VAEapart" --snapshot_name=snapshot.pt --noise_steps=1000 --ema_smoothing=False --magnification_factor=4 --UNet_type="Residual Attention UNet" --inp_out_channels=4 --batch_size=32 --image_size=256 --multiple_gpus=False --noise_schedule="cosine" --dataset_path="celebA_50k_VAE_encoded" --lr=1e-3 --epochs=100 --check_preds_epoch=1 --patience=25  --loss="MSE" --lr_schedule="cosine"
-# python train_diffusion_superres.py --model_name="$model_name" --snapshot_name=snapshot.pt --noise_steps=5 --ema_smoothing=False --magnification_factor=4 --inp_out_channels=4 --batch_size=2 --image_size=256 --multiple_gpus=False --noise_schedule="cosine" --dataset_path="$dataset_path" --lr=1e-3 --epochs=100 --check_preds_epoch=1 --patience=25  --loss="MSE" --lr_schedule="cosine"
+# dataset_path="102flowers_dataset_encoded"
+# python train_diffusion_generation.py --epochs=2 --batch_size=1 --image_size=64 --lr=1e-4 --lr_schedule="cosine" --check_preds_epoch=10 --noise_schedule="cosine" --snapshot_name=snapshot.pt --model_name="$model_name" --noise_steps=2 --patience=25  --dataset_path="$dataset_path" --inp_out_channels=3 --generate_video="False" --loss="MSE" --UNet_type="residual attention unet" --multiple_gpus="False" --ema_smoothing="False" --VAE_weight_path="$VAE_model_name" 
+
 
 ###### SAMPLING ######
 # dataset_path="celebA_10k"
