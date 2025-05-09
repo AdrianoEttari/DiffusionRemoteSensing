@@ -787,7 +787,6 @@ class Diffusion:
             print('Epochs without improving: ', epochs_without_improving)
 
 
-
 class CombinedLoss(nn.Module):
     def __init__(self, perceptual_loss, mse_loss, alpha=0.5, device='cuda'):
         super(CombinedLoss, self).__init__()
