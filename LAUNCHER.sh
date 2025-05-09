@@ -7,12 +7,12 @@
 # model_name="Residual_Attention_UNet_superres_magnification4_LRimgsize64_celeb50k_patches_downblur_StableDiffusion_LRandHR_gradientAccumulation_VAEapart"
 # model_name="Residual_MultiHeadCrossAttention_UNet_superres_magnification4_LRimgsize64_celeb50k_patches_downblur_StableDiffusion_LRandHR_gradientAccumulation_VAEapart"
 # model_name="Residual_MultiHeadCrossAttention_UNet_superres_magnification4_LRimgsize64_up42_sentinel2_patches_downblur_StableDiffusion_LRandHR_gradientAccumulation_VAEapart_17mln"
-model_name="Residual_MultipleMultiHeadCrossAttention_UNet_superres_magnification4_LRimgsize64_celeb50k_patches_downblur_StableDiffusion_LRandHR_gradientAccumulation_VAEapart"
+# model_name="Residual_MultipleMultiHeadCrossAttention_UNet_superres_magnification4_LRimgsize64_celeb50k_patches_downblur_StableDiffusion_LRandHR_gradientAccumulation_VAEapart"
 
 # VAE_model_name_HR="VAE_up42_hr256_finetuning"
 # VAE_model_name_LR="VAE_up42_lr64_finetuning"
 # VAE_model_name="VAE_up42_LRandHR_finetuning_gradientAccumulation"
-VAE_model_name="VAE_celeb100k_LRandHR_finetuning_gradientAccumulation"
+# VAE_model_name="VAE_celeb100k_LRandHR_finetuning_gradientAccumulation"
 
 ###### FINETUNING VAE ######
 # dataset_path="up42_sentinel2_patches"
@@ -38,10 +38,16 @@ VAE_model_name="VAE_celeb100k_LRandHR_finetuning_gradientAccumulation"
 
 ##################### SAR TO NDVI #####################
 
-model_name="TO_REMOVE"
+# model_name="TO_REMOVE"
 
-VAE_model_name="VAE_SAR_NDVI_finetuning_gradientAccumulation"
+# VAE_model_name="VAE_SAR_NDVI_finetuning_gradientAccumulation"
 
 ###### FINETUNING VAE ######
-dataset_path="SAR_TO_NDVI_dataset"
-python train_diffusion_SAR_TO_NDVI.py --epochs=2 --batch_size=2 --image_size=256 --lr=1e-4 --lr_scheduler="cosine" --check_preds_epoch=10 --noise_schedule="cosine" --snapshot_name=snapshot.pt --model_name="$VAE_model_name" --noise_steps=1000 --patience=25 --dataset_path="$dataset_path" --SAR_channels=2 --NDVI_channels=1 --generate_video=False --loss="MSE" --UNet_type="residual attention unet" --multiple_gpus=False --ema_smoothing=False --VAE_weight_path="$VAE_model_name"
+# dataset_path="SAR_TO_NDVI_dataset"
+# python train_diffusion_SAR_TO_NDVI.py --epochs=15 --batch_size=2 --image_size=128 --lr=1e-4 --lr_scheduler="cosine" --check_preds_epoch=10 --noise_schedule="cosine" --snapshot_name=snapshot.pt --model_name="$model_name" --noise_steps=100 --patience=25 --dataset_path="$dataset_path" --SAR_channels=1 --NDVI_channels=1 --generate_video=False --loss="MSE" --UNet_type="residual multihead attention unet" --multiple_gpus=False --ema_smoothing=False --VAE_weight_path="$VAE_model_name" --freeze_vae_params=True
+# FINETUNING FOR 75 EPOCHS
+
+
+###### DIFFUSION TRAINING ######
+# dataset_path="SAR_TO_NDVI_dataset"
+# python train_diffusion_SAR_TO_NDVI.py --epochs=15 --batch_size=2 --image_size=128 --lr=1e-4 --lr_scheduler="cosine" --check_preds_epoch=10 --noise_schedule="cosine" --snapshot_name=snapshot.pt --model_name="$model_name" --noise_steps=10 --patience=25 --dataset_path="$dataset_path" --SAR_channels=1 --NDVI_channels=1 --generate_video=False --loss="MSE" --UNet_type="residual multihead attention unet" --multiple_gpus=False --ema_smoothing=False --VAE_weight_path="$VAE_model_name" --freeze_vae_params=False

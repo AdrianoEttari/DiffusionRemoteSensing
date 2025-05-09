@@ -90,7 +90,8 @@ class get_data_SAR_TO_NDVI(Dataset):
         # Bring the images to the range [0,1] (assume they are in the range [-1,1])
         sar_img = (sar_img+1)/2
         ndvi_img = (ndvi_img+1)/2
-        
+
+        sar_img = sar_img[0,:,:].unsqueeze(0) # TAKE JUST THE VV CHANNEL OF SAR IMAGES
         return sar_img, ndvi_img
     
 class get_data_superres(Dataset):

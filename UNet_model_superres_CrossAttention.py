@@ -118,7 +118,6 @@ class CrossAttentionEncoder(nn.Module):
             x = block(x, skip)
         return x
 
-    
 class ResConvBlock(nn.Module):
     '''
     This class defines a residual convolutional block. It does not contain the layer for the actual

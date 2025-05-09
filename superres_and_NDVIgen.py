@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 from PIL import Image, ImageFilter
 import torch
 import os
-from UNet_model_SAR_TO_NDVI import Residual_Attention_UNet_SAR_TO_NDVI
+from UNet_model_SAR_TO_NDVI_CrossAttention import Residual_Attention_UNet_SAR_TO_NDVI
 from train_diffusion_SAR_TO_NDVI import Diffusion as Diffusion_SAR_TO_NDVI
 import matplotlib.pyplot as plt
 

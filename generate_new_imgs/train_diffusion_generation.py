@@ -86,6 +86,11 @@ class Diffusion:
             self.beta = self.from_alpha_hat_to_beta()
             self.alpha = 1. - self.beta
 
+        if VAE_weight_path:
+            if os.path.exists(self.VAE_weight_path):
+                print(f"Loading fine-tuned VAE model from {self.VAE_weight_path}...")
+                self._load_snapshot_VAE(self.VAE_weight_path, self.vae_model)
+
     def from_alpha_hat_to_beta(self):
         '''
         This function is necessary because it allows to get from the alpha hat that we got with the cosine schedule
@@ -271,6 +276,25 @@ class Diffusion:
         torch.save(snapshot, self.snapshot_path)
         print(f"Epoch {epoch} | Training snapshot saved at {self.snapshot_path}")
 
+    def _save_snapshot_VAE(self, model, snapshot_path):
+        '''
+        This function loads the model state and the current epoch from a snapshot.
+        It is a mandatory function in order to be fault tolerant. The reason is that if the training is interrupted, we can resume
+        it from the last snapshot.
+
+        Input:
+            model: the model to save
+
+        Output:
+            None
+        '''
+        if self.multiple_gpus:
+            snapshot = model.module.state_dict()
+        else:
+            snapshot = model.state_dict()
+        torch.save(snapshot, snapshot_path)
+        print(f"Snapshot saved at {snapshot_path}")
+
     def _load_snapshot(self):
         '''
         This function loads the model state and the last epoch of training (so that we can restart the
@@ -295,6 +319,26 @@ class Diffusion:
         # print(f"Resuming training from snapshot at Epoch {self.epochs_run}")
         print(f"Snapshot loaded from {self.snapshot_path}")
 
+    def _load_snapshot_VAE(self, snapshot_path, model):
+        '''
+        This function loads the model state and the last epoch of training (so that we can restart the
+        training at this point instead of restarting from 0) from a snapshot.
+        It is a mandatory function in order to be fault tolerant. The reason is that if the training is interrupted, we can resume
+        it from the last snapshot.
+        '''
+        if self.multiple_gpus:
+            from collections import OrderedDict
+
+            snapshot = torch.load(snapshot_path, map_location='cpu', weights_only=True)
+            model_state = OrderedDict((key.replace('module.', ''), value) for key, value in snapshot.items())
+            model.module.load_state_dict(model_state)
+            model.module.to(self.device)
+        else:
+            snapshot = torch.load(snapshot_path, map_location=self.device, weights_only=True)
+            model.load_state_dict(snapshot)
+
+        print(f"Snapshot loaded from {snapshot_path}")
+        
     def early_stopping(self, patience, epochs_without_improving):
         '''
         This function checks if the validation loss is increasing. If it is for more than patience times,

@@ -51,59 +51,127 @@ class EMA:
         ema_model.load_state_dict(model.state_dict()) # we set the weights of ema_model
         # to the ones of model.
 
-class AttentionBlock(nn.Module):
-    def __init__(self, f_g, f_x, f_int, device):
-        '''
-        AttentionBlock: Applies an attention mechanism to the input data.
+# class AttentionBlock(nn.Module):
+#     def __init__(self, f_g, f_x, f_int, device):
+#         '''
+#         AttentionBlock: Applies an attention mechanism to the input data.
         
-        Args:
-            f_g (int): Number of channels in the 'g' input (image on the up path).
-            f_x (int): Number of channels in the 'x' input (residual image).
-            f_int (int): Number of channels in the intermediate layer.
-            device: Device where the operations should be performed.
-        '''
-        super().__init__()
-        self.w_g = nn.Sequential(
-            nn.Conv2d(f_g, f_int, kernel_size=1, stride=1, padding=0, bias=True).to(device),
-        ) # Computes a 1x1 convolution of the 'g' input to reduce its channel dimension to f_int.
+#         Args:
+#             f_g (int): Number of channels in the 'g' input (image on the up path).
+#             f_x (int): Number of channels in the 'x' input (residual image).
+#             f_int (int): Number of channels in the intermediate layer.
+#             device: Device where the operations should be performed.
+#         '''
+#         super().__init__()
+#         self.w_g = nn.Sequential(
+#             nn.Conv2d(f_g, f_int, kernel_size=1, stride=1, padding=0, bias=True).to(device),
+#         ) # Computes a 1x1 convolution of the 'g' input to reduce its channel dimension to f_int.
         
-        self.w_x = nn.Sequential(
-            nn.Conv2d(f_x, f_int, kernel_size=2, stride=2, padding=0, bias=True).to(device),
-        ) # Computes a 1x1 convolution of the 'x' input to reduce its channel dimension to f_int.
+#         self.w_x = nn.Sequential(
+#             nn.Conv2d(f_x, f_int, kernel_size=2, stride=2, padding=0, bias=True).to(device),
+#         ) # Computes a 1x1 convolution of the 'x' input to reduce its channel dimension to f_int.
 
-        self.psi = nn.Sequential(
-            nn.Conv2d(f_int, 1, kernel_size=1, stride=1, padding=0, bias=True).to(device),
-            nn.Sigmoid()
-        ) # Computes a 1x1 convolution of the element-wise sum of the processed 'g' and 'x' inputs, followed by a sigmoid activation.
+#         self.psi = nn.Sequential(
+#             nn.Conv2d(f_int, 1, kernel_size=1, stride=1, padding=0, bias=True).to(device),
+#             nn.Sigmoid()
+#         ) # Computes a 1x1 convolution of the element-wise sum of the processed 'g' and 'x' inputs, followed by a sigmoid activation.
         
-        self.relu = nn.ReLU(inplace=False)
+#         self.relu = nn.ReLU(inplace=False)
 
-        self.result = nn.Sequential(
-            nn.Conv2d(f_x, f_x, kernel_size=1, stride=1, padding=0, bias=True).to(device),
-            nn.BatchNorm2d(f_x).to(device)
-        )
+#         self.result = nn.Sequential(
+#             nn.Conv2d(f_x, f_x, kernel_size=1, stride=1, padding=0, bias=True).to(device),
+#             nn.BatchNorm2d(f_x).to(device)
+#         )
                                                                         
-    def forward(self, x, g):
-        '''
-        Forward pass for the AttentionBlock.
+#     def forward(self, x, g):
+#         '''
+#         Forward pass for the AttentionBlock.
 
-        Args:
-            x (torch.Tensor): The 'x' input (residual image).
-            g (torch.Tensor): The 'g' input (image on the up path).
+#         Args:
+#             x (torch.Tensor): The 'x' input (residual image).
+#             g (torch.Tensor): The 'g' input (image on the up path).
 
-        Returns:
-            torch.Tensor: The output of the attention mechanism applied to the input data.
-        '''
-        # Assuming g: 1,128,28,28 # x: 1,128,56,56
-        g1 = self.w_g(g) # 1,128,28,28
-        x1 = self.w_x(x) # 1,128,28,28
-        psi = self.relu(g1 + x1) # 1,128,28,28
-        psi = self.psi(psi) # 1,1,28,28
-        upsample_psi = F.interpolate(psi, scale_factor=2, mode='nearest') # 1,1,56,56
-        upsample_psi = upsample_psi.repeat_interleave(repeats=x.shape[1], dim=1) # 1,128,56,56 (repeats the 1 channel to 128)
-        result = self.result(upsample_psi * x) # 1,128,56,56
-        return result
+#         Returns:
+#             torch.Tensor: The output of the attention mechanism applied to the input data.
+#         '''
+#         # Assuming g: 1,128,28,28 # x: 1,128,56,56
+#         g1 = self.w_g(g) # 1,128,28,28
+#         x1 = self.w_x(x) # 1,128,28,28
+#         psi = self.relu(g1 + x1) # 1,128,28,28
+#         psi = self.psi(psi) # 1,1,28,28
+#         upsample_psi = F.interpolate(psi, scale_factor=2, mode='nearest') # 1,1,56,56
+#         upsample_psi = upsample_psi.repeat_interleave(repeats=x.shape[1], dim=1) # 1,128,56,56 (repeats the 1 channel to 128)
+#         result = self.result(upsample_psi * x) # 1,128,56,56
+#         return result
     
+class FeedForward(nn.Module):
+    def __init__(self, dim, hidden_dim, dropout=0.1):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Conv2d(dim, hidden_dim, kernel_size=1),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Conv2d(hidden_dim, dim, kernel_size=1),
+            nn.Dropout(dropout),
+        )
+
+    def forward(self, x):
+        return self.net(x)
+    
+class CrossAttentionBlock(nn.Module):
+    def __init__(self, in_channels, attn_channels, num_heads=4, hidden_ffn=256, dropout=0.1):
+        super().__init__()
+        self.num_heads = num_heads
+        self.head_dim = attn_channels // num_heads
+        self.scale = self.head_dim ** -0.5
+
+        self.query_conv = nn.Conv2d(in_channels, attn_channels, kernel_size=1)
+        self.key_conv   = nn.Conv2d(in_channels, attn_channels, kernel_size=1)
+        self.value_conv = nn.Conv2d(in_channels, attn_channels, kernel_size=1)
+        self.out_proj   = nn.Conv2d(attn_channels, in_channels, kernel_size=1)
+
+        self.norm1 = nn.LayerNorm(in_channels)
+        self.norm2 = nn.LayerNorm(in_channels)
+
+        self.ffn = FeedForward(in_channels, hidden_ffn, dropout)
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, x, skip):
+        B, C, H, W = x.shape
+        Q = self.query_conv(x).reshape(B, self.num_heads, self.head_dim, H * W).permute(0, 1, 3, 2)
+        K = self.key_conv(skip).reshape(B, self.num_heads, self.head_dim, H * W)
+        V = self.value_conv(skip).reshape(B, self.num_heads, self.head_dim, H * W).permute(0, 1, 3, 2)
+
+        attn = torch.matmul(Q, K) * self.scale
+        attn = F.softmax(attn, dim=-1)
+        attn_out = torch.matmul(attn, V)
+
+        attn_out = attn_out.permute(0, 1, 3, 2).contiguous().reshape(B, -1, H, W)
+        attn_out = self.out_proj(attn_out)
+
+        # Add & Norm (attention)
+        x = x + self.dropout(attn_out)
+        x = self.norm1(x.permute(0, 2, 3, 1).contiguous()).permute(0, 3, 1, 2).contiguous()
+
+        # Add & Norm (FFN)
+        x = x + self.ffn(x)
+        x = self.norm2(x.permute(0, 2, 3, 1).contiguous()).permute(0, 3, 1, 2).contiguous()
+
+        return x
+
+class CrossAttentionEncoder(nn.Module):
+    def __init__(self, in_channels, attn_channels, num_heads=4, depth=4, hidden_ffn=256):
+        super().__init__()
+        self.blocks = nn.ModuleList([
+            CrossAttentionBlock(in_channels, attn_channels, num_heads, hidden_ffn)
+            for _ in range(depth)
+        ])
+
+    def forward(self, x, skip):
+        for block in self.blocks:
+            x = block(x, skip)
+        return x
+
 class ResConvBlock(nn.Module):
     '''
     This class defines a residual convolutional block. It does not contain the layer for the actual
@@ -179,7 +247,12 @@ class UpConvBlock(nn.Module):
         self.batch_norm = nn.BatchNorm2d(out_ch, device=device)
         self.relu = nn.ReLU(inplace=False)
         self.conv = nn.Conv2d(in_ch, out_ch, kernel_size=3, stride=1, padding='same', bias=True, device=device)
-        self.transform = nn.ConvTranspose2d(out_ch, out_ch, kernel_size=3, stride=2, padding=1, bias=True, output_padding=1, device=device)
+        # self.transform = nn.ConvTranspose2d(out_ch, out_ch, kernel_size=3, stride=2, padding=1, bias=True, output_padding=1, device=device)
+        self.transform = nn.Sequential(
+            nn.Upsample(scale_factor=2, mode="bilinear", align_corners=True),
+            nn.Conv2d(out_ch, out_ch, kernel_size=3, stride=1, padding=1)
+        )
+
 
     def _make_te(self, dim_in, dim_out, device):
         '''
@@ -260,7 +333,7 @@ class RRDB(nn.Module):
 ################################################ Models #################################################
 #########################################################################################################
 
-class Residual_Attention_UNet_SAR_TO_NDVI(nn.Module):
+class Residual_CrossAttention_UNet_SAR_TO_NDVI(nn.Module):
     def __init__(self, SAR_channels=2, NDVI_channels=1, device=None):
         super().__init__()
         self.SAR_channels = SAR_channels
@@ -305,8 +378,11 @@ class Residual_Attention_UNet_SAR_TO_NDVI(nn.Module):
             gating_signal(self.up_channels[i], self.up_channels[i+1], self.device) \
             for i in range(len(self.up_channels)-2)])
         
+        # self.attention_blocks = nn.ModuleList([
+        #     AttentionBlock(self.up_channels[i+1], self.up_channels[i+1], self.up_channels[i+1], self.device) \
+        #     for i in range(len(self.up_channels)-2)])
         self.attention_blocks = nn.ModuleList([
-            AttentionBlock(self.up_channels[i+1], self.up_channels[i+1], self.up_channels[i+1], self.device) \
+            CrossAttentionEncoder(in_channels=self.up_channels[i+1], attn_channels=self.up_channels[i+1], num_heads=8, depth=4, hidden_ffn=256)
             for i in range(len(self.up_channels)-2)])
         
         self.ups = nn.ModuleList([
@@ -362,6 +438,7 @@ class Residual_Attention_UNet_SAR_TO_NDVI(nn.Module):
         # UNET (UPSAMPLE)
         for i, (gating_signal, attention_block, up, up_conv) in enumerate(zip(self.gating_signals,self.attention_blocks,self.ups, self.up_convs)):
             gating = gating_signal(x)
+            gating = F.interpolate(gating, scale_factor=2, mode='bilinear', align_corners=False) ###### ATTEMPT
             attention = attention_block(residual_inputs[-(i+1)], gating)
             x = up(x, t)
             x = torch.cat([x, attention], dim=1)
@@ -370,28 +447,7 @@ class Residual_Attention_UNet_SAR_TO_NDVI(nn.Module):
         return self.output(x)
     
 if __name__=="__main__":
-    # model = Residual_Attention_UNet_superres(device='cpu')
-    # model = Residual_MultiHeadAttention_UNet_superres(device='cpu')
-    model = Residual_Attention_UNet_SAR_TO_NDVI(start_image_size=224,device='cpu')
-
-    def print_parameter_count(model):
-        total_params = 0
-        trainable_params = 0  # Count only trainable parameters
-
-        i = 0
-        for name, param in model.named_parameters():
-            
-            num_params = param.numel()
-            total_params += num_params
-            if param.requires_grad:
-                trainable_params += num_params
-            
-            print(f" Idx: {i}, Layer: {name}, Parameters: {num_params}, Requires Grad: {param.requires_grad}")
-            i+=1
-        print("=" * 50)
-        print(f"Total Parameters: {total_params}, Trainable Parameters: {trainable_params}")
-
-    print_parameter_count(model)
+    pass
 
 
 

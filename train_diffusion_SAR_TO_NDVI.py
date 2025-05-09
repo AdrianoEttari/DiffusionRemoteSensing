@@ -8,11 +8,20 @@ from torchvision import transforms, models
 from utils import get_data_SAR_TO_NDVI, video_maker, CosineAnnealingWarmupRestarts
 import copy
 
-from UNet_model_SAR_TO_NDVI import Residual_Attention_UNet_SAR_TO_NDVI, EMA
+from UNet_model_SAR_TO_NDVI_CrossAttention import Residual_CrossAttention_UNet_SAR_TO_NDVI, EMA
 
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.distributed import init_process_group, destroy_process_group
 from torch.utils.data.distributed import DistributedSampler
+import torch.nn.functional as F
+
+from lpips import LPIPS  # Perceptual loss library
+
+import warnings
+import uuid
+warnings.filterwarnings("ignore", category=UserWarning)
+warnings.filterwarnings("ignore", category=FutureWarning)
+import gc
 
 from diffusers import StableDiffusionPipeline, UNet2DConditionModel
 
@@ -21,7 +30,9 @@ class Diffusion:
             self,
             noise_schedule: str,
             model: nn.Module,
+            vae_model: nn.Module,
             snapshot_path: str,
+            VAE_weight_path: str,
             noise_steps=1000,
             beta_start=1e-4,
             beta_end=0.02,
@@ -38,16 +49,31 @@ class Diffusion:
         self.image_size = image_size
         self.model_name = model_name
         self.device = device
-        self.snapshot_path = snapshot_path
         self.multiple_gpus = multiple_gpus
+        
+        self.VAE_weight_path = VAE_weight_path
+        self.snapshot_path = snapshot_path
+
         self.ema_smoothing = ema_smoothing
-        self.model = model.to(self.device)
+
+        if model:
+            self.model = model.to(self.device)
+
+        if vae_model:
+            self.vae_model = vae_model.to(self.device)
+
         # epoch_run is used by _save_snapshot and _load_snapshot to keep track of the current epoch
         self.epochs_run = 0
         # If a snapshot exists, we load it
-        if os.path.exists(snapshot_path):
-            print("Loading snapshot")
-            self._load_snapshot()
+        if snapshot_path:
+            if os.path.exists(snapshot_path):
+                print("Loading snapshot")
+                self._load_snapshot()
+
+        if VAE_weight_path:
+            if os.path.exists(self.VAE_weight_path):
+                print(f"Loading fine-tuned VAE model from {self.VAE_weight_path}...")
+                self._load_snapshot_VAE(self.VAE_weight_path, self.vae_model)
 
         self.noise_schedule = noise_schedule
 
@@ -218,6 +244,25 @@ class Diffusion:
         torch.save(snapshot, self.snapshot_path)
         print(f"Epoch {epoch} | Training snapshot saved at {self.snapshot_path}")
 
+    def _save_snapshot_VAE(self, model, snapshot_path):
+        '''
+        This function loads the model state and the current epoch from a snapshot.
+        It is a mandatory function in order to be fault tolerant. The reason is that if the training is interrupted, we can resume
+        it from the last snapshot.
+
+        Input:
+            model: the model to save
+
+        Output:
+            None
+        '''
+        if self.multiple_gpus:
+            snapshot = model.module.state_dict()
+        else:
+            snapshot = model.state_dict()
+        torch.save(snapshot, snapshot_path)
+        print(f"Snapshot saved at {snapshot_path}")
+
     def _load_snapshot(self):
         '''
         This function loads the model state and the last epoch of training (so that we can restart the
@@ -242,6 +287,26 @@ class Diffusion:
         self.epochs_run = snapshot["EPOCHS_RUN"]
         print(f"Resuming training from snapshot at Epoch {self.epochs_run}")
 
+    def _load_snapshot_VAE(self, snapshot_path, model):
+        '''
+        This function loads the model state and the last epoch of training (so that we can restart the
+        training at this point instead of restarting from 0) from a snapshot.
+        It is a mandatory function in order to be fault tolerant. The reason is that if the training is interrupted, we can resume
+        it from the last snapshot.
+        '''
+        if self.multiple_gpus:
+            from collections import OrderedDict
+
+            snapshot = torch.load(snapshot_path, map_location='cpu', weights_only=True)
+            model_state = OrderedDict((key.replace('module.', ''), value) for key, value in snapshot.items())
+            model.module.load_state_dict(model_state)
+            model.module.to(self.device)
+        else:
+            snapshot = torch.load(snapshot_path, map_location=self.device, weights_only=True)
+            model.load_state_dict(snapshot)
+
+        print(f"Snapshot loaded from {snapshot_path}")
+
     def early_stopping(self, patience, epochs_without_improving):
         '''
         This function checks if the validation loss is increasing. If it is for more than patience times,
@@ -250,6 +315,96 @@ class Diffusion:
         if epochs_without_improving >= patience:
             print('Early stopping! Training stopped')
             return True
+
+    def fine_tuning_VAE(self, dataloader, epochs, learning_rate):
+
+        print("Fine-tuning VAE...")
+        device = self.device
+        vae = self.vae_model
+        save_path = self.VAE_weight_path
+
+        optimizer = torch.optim.AdamW(vae.parameters(), lr=learning_rate)
+
+        loss_fn = vae_loss(device=device, lambda_rec=1.0, lambda_latent=0.5)
+
+        vae.train()
+
+        for epoch in range(epochs):
+            pbar_dataloader = tqdm(dataloader, desc='Fine-tuning VAE', position=0)
+
+            if self.multiple_gpus:
+                pbar_dataloader.sampler.set_epoch(epoch) 
+            total_loss = 0
+            for i,(SAR_img,NDVI_img) in enumerate(pbar_dataloader):
+                SAR_img = torch.stack([img for img in SAR_img]).to(device).to(torch.float32)
+                NDVI_img = torch.stack([img for img in NDVI_img]).to(device).to(torch.float32)
+                
+                if self.multiple_gpus:
+                    latents_SAR = self.vae_model.module.encode(SAR_img).latent_dist.sample()
+                    latents_NDVI = self.vae_model.module.encode(NDVI_img).latent_dist.sample()
+                    reconstructed_SAR = self.vae_model.module.decode(latents_SAR).sample
+                    reconstructed_NDVI = self.vae_model.module.decode(latents_NDVI).sample
+                else:
+                    latents_SAR = self.vae_model.encode(SAR_img).latent_dist.sample()
+                    latents_NDVI = self.vae_model.encode(NDVI_img).latent_dist.sample()
+                    reconstructed_SAR = self.vae_model.decode(latents_SAR).sample
+                    reconstructed_NDVI = self.vae_model.decode(latents_NDVI).sample
+                        
+                loss = loss_fn(x_SAR=SAR_img, x_NDVI=NDVI_img, latents_SAR=latents_SAR, latents_NDVI=latents_NDVI, reconstructed_SAR=reconstructed_SAR, reconstructed_NDVI=reconstructed_NDVI)
+                # gradient accumulation 
+                if SAR_img.shape[0] < 8: # If the batch size is smaller than 8 then use gradient accumulation
+                    loss = loss/4
+
+                loss.backward()
+                total_loss += loss.item()
+
+                # gradient accumulation
+                if SAR_img.shape[0] < 8: # If the batch size is smaller than 8 then use gradient accumulation
+                    if (i+1) % 4 == 0:
+                        optimizer.step()
+                        optimizer.zero_grad()
+                else:
+                    optimizer.step()
+                    optimizer.zero_grad()
+            
+            if self.multiple_gpus:
+                if self.device == 0:
+                    avg_loss = total_loss / len(dataloader)
+                    print(f"Epoch [{epoch+1}/{epochs}], Loss: {avg_loss:.4f}")
+
+                    self._save_snapshot_VAE(vae, save_path)
+                    print(f"Fine-tuned VAE model saved at {save_path}")
+            else:
+                avg_loss = total_loss / len(dataloader)
+                print(f"Epoch [{epoch+1}/{epochs}], Loss: {avg_loss:.4f}")
+
+                self._save_snapshot_VAE(vae, save_path)
+                print(f"Fine-tuned VAE model saved at {save_path}")
+
+        vae.eval()
+        return vae
+    
+    def encoded_dataset_VAE(self, dataloader, save_path):
+            import numpy as np
+            self.vae_model.eval()
+            os.makedirs(os.path.join(save_path, "SAR_img"), exist_ok=True)
+            os.makedirs(os.path.join(save_path, "NDVI_img"), exist_ok=True)
+            pbar_dataloader = tqdm(dataloader, desc='Encoding dataset', position=0)
+            for i,(SAR_img,NDVI_img) in enumerate(pbar_dataloader):
+                SAR_img = SAR_img.to(self.device)
+                NDVI_img = NDVI_img.to(self.device)
+                if self.multiple_gpus:
+                    SAR_img = self.vae_model.module.encode(SAR_img).latent_dist.sample()
+                    NDVI_img = self.vae_model.module.encode(NDVI_img).latent_dist.sample()
+                else:
+                    SAR_img = self.vae_model.encode(SAR_img).latent_dist.sample()
+                    NDVI_img = self.vae_model.encode(NDVI_img).latent_dist.sample()
+                for idx in range(SAR_img.shape[0]):
+                    unique_id = uuid.uuid4().hex
+                    SAR_img_to_save = SAR_img[idx].permute(1,2,0).detach().cpu().numpy()
+                    NDVI_img_to_save = NDVI_img[idx].permute(1,2,0).detach().cpu().numpy()
+                    np.save(os.path.join(save_path, "SAR_img",  f'{unique_id}'), SAR_img_to_save)
+                    np.save(os.path.join(save_path, "NDVI_img",  f'{unique_id}'), NDVI_img_to_save)
 
     def train(self, lr, epochs, check_preds_epoch, train_loader, val_loader, patience, loss, lr_scheduler=None):
         '''
@@ -435,13 +590,59 @@ class Diffusion:
         plt.savefig(os.path.join(os.getcwd(), 'models_run', self.model_name, 'results', f'NDVI_pred_{epoch}_epoch.png'))
 
 
+class vae_loss(nn.Module):
+    def __init__(self, device, lambda_rec=1.0, lambda_latent=0.5):
+        super(vae_loss, self).__init__()
+        self.lpips_loss = LPIPS(net='vgg').to(device)
+        self.lambda_rec = lambda_rec
+        self.lambda_latent = lambda_latent
+        
+    def forward(self, x_SAR, x_NDVI, latents_SAR, latents_NDVI, reconstructed_SAR, reconstructed_NDVI):
+        rec_loss = self._reconstruction_loss(x_SAR, x_NDVI, reconstructed_SAR, reconstructed_NDVI)
+        latent_loss = self._latent_consistency_loss(latents_SAR, latents_NDVI)
+        total_loss = self.lambda_rec * rec_loss + self.lambda_latent * latent_loss
+        return total_loss
+
+    def _reconstruction_loss(self, x_SAR, x_NDVI, reconstructed_SAR, reconstructed_NDVI):
+        rec_loss = (F.l1_loss(reconstructed_NDVI, x_NDVI) + F.l1_loss(reconstructed_SAR, x_SAR) +
+            self.lpips_loss(reconstructed_NDVI, x_NDVI).mean())
+        return rec_loss
+    
+    def _latent_consistency_loss(self, latents_SAR, latents_NDVI):
+        '''
+        The reason for this loss is that we want the latent space of the low resolution images
+        to be similar to the latent space of the high resolution images. This is because the semantic
+        information should be the same in both the low and high resolution images and in the latent 
+        space we want all this information to be located and all the perceptual information to be
+        discarded.
+        '''
+        latent_loss = F.mse_loss(latents_SAR, latents_NDVI)
+        return latent_loss 
+
+class VAE_model_wrapped(nn.Module):
+    def __init__(self, vae_model, in_channels, freeze_vae_params=False):
+        super(VAE_model_wrapped, self).__init__()
+        self.vae_model = vae_model
+        self.in_channels = in_channels
+        self.conv = nn.Conv2d(in_channels, 3, kernel_size=3, stride=1, padding=1)
+        if freeze_vae_params: #if True, the vae parameters are frozen and just the conv layer is trained
+            for param in self.vae_model.parameters():
+                param.requires_grad = False
+    def encode(self, x):
+        x = self.conv(x)
+        latents = self.vae_model.encode(x)
+        return latents
+
+    def decode(self, latents):
+        return self.vae_model.decode(latents)
+
 def dataloader_PRE_encoding_maker(dataset_path, batch_size, multiple_gpus):
     train_path = f'{dataset_path}/train' 
     valid_path = f'{dataset_path}/test'
 
     train_dataset = get_data_SAR_TO_NDVI(train_path)
     val_dataset = get_data_SAR_TO_NDVI(valid_path)
-        
+
     if multiple_gpus:
         train_loader = DataLoader(dataset=train_dataset, batch_size=batch_size, shuffle=False, sampler=DistributedSampler(train_dataset))
         val_loader = DataLoader(dataset=val_dataset, batch_size=batch_size,shuffle=False, sampler=DistributedSampler(val_dataset))
@@ -453,7 +654,7 @@ def dataloader_PRE_encoding_maker(dataset_path, batch_size, multiple_gpus):
 
 def dataloader_POST_encoding_maker(dataset_path, batch_size, multiple_gpus):
     ####### TO ADJUST #######
-    dataset = get_data_superres_PLAIN(dataset_path)
+    dataset = get_data_SAR_TO_NDVI(dataset_path)
     if multiple_gpus:
         dataloader = DataLoader(dataset=dataset, batch_size=batch_size, shuffle=False, sampler=DistributedSampler(dataset),drop_last=True)
     else:
@@ -464,9 +665,11 @@ def UNet_model_maker(UNet_type, SAR_channels, NDVI_channels, device):
 
     if UNet_type.lower() == 'residual attention unet':
         print('Using Residual Attention UNet')
-        model = Residual_Attention_UNet_SAR_TO_NDVI(SAR_channels, NDVI_channels, device).to(device)
+        # model = Residual_Attention_UNet_SAR_TO_NDVI(SAR_channels, NDVI_channels, device).to(device)
+        pass
     elif UNet_type.lower() == 'residual multihead attention unet':
         print('Using Residual MultiHead Attention UNet')
+        model = Residual_CrossAttention_UNet_SAR_TO_NDVI(SAR_channels, NDVI_channels, device).to(device)
         pass
     elif UNet_type.lower() == 'residual visual multihead attention unet':
         print('Using Residual Visual MultiHead Attention UNet')
@@ -477,23 +680,23 @@ def UNet_model_maker(UNet_type, SAR_channels, NDVI_channels, device):
 
     return model
 
-def VAE_model_maker(device):
+def VAE_model_maker(device, freeze_vae_params):
     vae_model_path = "CompVis/stable-diffusion-v1-4"
     pipe = StableDiffusionPipeline.from_pretrained(vae_model_path)
     vae_model = pipe.vae
     vae_model = pipe.vae.to(device)
+    vae_model = VAE_model_wrapped(vae_model, in_channels=1, freeze_vae_params=freeze_vae_params).to(device)
     return vae_model
 
-def VAE_finetuning(dataset_path, image_size, batch_size, multiple_gpus, VAE_weight_path, device):
-
+def VAE_finetuning(dataset_path, image_size, batch_size, multiple_gpus, VAE_weight_path, device, freeze_vae_params):
     train_loader, val_loader = dataloader_PRE_encoding_maker(dataset_path=dataset_path, batch_size=batch_size, multiple_gpus=multiple_gpus)
-    vae_model = VAE_model_maker(device)
+    vae_model = VAE_model_maker(device, freeze_vae_params)
         
     if multiple_gpus:
         vae_model = DDP(vae_model, device_ids=[device], find_unused_parameters=True) 
 
     VAE_weight_path = os.path.join(os.curdir, 'models_run', VAE_weight_path)
-
+    
     diffusion = Diffusion(
         noise_schedule=None, model=None, vae_model=vae_model,
         snapshot_path=None,
@@ -502,28 +705,28 @@ def VAE_finetuning(dataset_path, image_size, batch_size, multiple_gpus, VAE_weig
         image_size=image_size, model_name=None,
         multiple_gpus=multiple_gpus, ema_smoothing=None)
         
-    diffusion.fine_tuning_VAE(train_loader, epochs=10, learning_rate=1e-4)
+    diffusion.fine_tuning_VAE(train_loader, epochs=15, learning_rate=1e-4)
 
-    ########## ENCODE DATASET AND SAVE IT ##########
-    encoded_images_train_save_path = os.path.join(dataset_path+'_VAE_encoded', "train_original")
-    encoded_images_val_save_path = os.path.join(dataset_path+'_VAE_encoded', "val_original")
-    if os.path.exists(os.path.join(encoded_images_train_save_path, 'img')):
-        if len(os.listdir(os.path.join(encoded_images_train_save_path, 'img'))) == 0:
+    if not freeze_vae_params: # we freeze the parameters just to train the conv layer, before finetuning the VAE
+        ########## ENCODE DATASET AND SAVE IT ##########
+        encoded_images_train_save_path = os.path.join(dataset_path+'_VAE_encoded', "train")
+        encoded_images_val_save_path = os.path.join(dataset_path+'_VAE_encoded', "val")
+        if os.path.exists(os.path.join(encoded_images_train_save_path, 'img')):
+            if len(os.listdir(os.path.join(encoded_images_train_save_path, 'img'))) == 0:
+                diffusion.encoded_dataset_VAE(dataloader=train_loader, save_path=encoded_images_train_save_path)
+                diffusion.encoded_dataset_VAE(dataloader=val_loader, save_path=encoded_images_val_save_path)
+        else:
             diffusion.encoded_dataset_VAE(dataloader=train_loader, save_path=encoded_images_train_save_path)
             diffusion.encoded_dataset_VAE(dataloader=val_loader, save_path=encoded_images_val_save_path)
-    else:
-        diffusion.encoded_dataset_VAE(dataloader=train_loader, save_path=encoded_images_train_save_path)
-        diffusion.encoded_dataset_VAE(dataloader=val_loader, save_path=encoded_images_val_save_path)
 
-    ########## RENAME IMAGES (OPTIONAL) ##########
-    # for set_path in [encoded_images_train_save_path, encoded_images_val_save_path]:
-    #     for i, img_name in tqdm(enumerate(os.listdir(os.path.join(set_path, "img"))), desc='Renaming images', position=0):
-    #         if img_name.endswith('.npy'):
-    #                 os.rename(os.path.join(set_path, "img", img_name), os.path.join(set_path, "img", str(i+50000)+".npy"))
+        ########## RENAME IMAGES (OPTIONAL) ##########
+        # for set_path in [encoded_images_train_save_path, encoded_images_val_save_path]:
+        #     for i, img_name in tqdm(enumerate(os.listdir(os.path.join(set_path, "img"))), desc='Renaming images', position=0):
+        #         if img_name.endswith('.npy'):
+        #                 os.rename(os.path.join(set_path, "img", img_name), os.path.join(set_path, "img", str(i+50000)+".npy"))
 
 def Diffusion_training(snapshot_folder_path, model_name, snapshot_name,
-                        noise_steps, ema_smoothing, magnification_factor,  
-                            UNet_type, input_channels, output_channels, 
+                        noise_steps, ema_smoothing, UNet_type, SAR_channels, NDVI_channels, 
                                 batch_size, image_size, multiple_gpus, 
                                     noise_schedule, dataset_path, lr,
                                      epochs,check_preds_epoch, patience,
@@ -532,25 +735,23 @@ def Diffusion_training(snapshot_folder_path, model_name, snapshot_name,
     os.makedirs(snapshot_folder_path, exist_ok=True)
     os.makedirs(os.path.join(os.curdir, 'models_run', model_name, 'results'), exist_ok=True)
 
-    model = UNet_model_maker(UNet_type, input_channels, output_channels, device, image_size)
-    print("Num params: ", sum(p.numel() for p in model.parameters()))
+    model = UNet_model_maker(UNet_type, SAR_channels, NDVI_channels, device)
 
     if multiple_gpus:
         model = DDP(model, device_ids=[device], find_unused_parameters=True)
 
     snapshot_path = os.path.join(snapshot_folder_path, snapshot_name)
-
+    
     diffusion = Diffusion(
         noise_schedule=noise_schedule, model=model, vae_model=None,
         snapshot_path=snapshot_path,
         VAE_weight_path=None,
-        noise_steps=noise_steps, beta_start=1e-4, beta_end=0.02, 
-        magnification_factor=magnification_factor,device=device,
-        image_size=image_size, model_name=model_name, Degradation_type=None,
+        noise_steps=noise_steps, beta_start=1e-4, beta_end=0.02 ,device=device,
+        image_size=image_size, model_name=model_name,
         multiple_gpus=multiple_gpus, ema_smoothing=ema_smoothing)
         
-    encoded_images_train_save_path = os.path.join(dataset_path, "train_original")
-    encoded_images_val_save_path = os.path.join(dataset_path, "val_original")
+    encoded_images_train_save_path = os.path.join(dataset_path, "train")
+    encoded_images_val_save_path = os.path.join(dataset_path, "val")
 
     ########## CREATE DATALOADERS FOR THE POST-ENCODING MODEL ##########
     train_loader = dataloader_POST_encoding_maker(encoded_images_train_save_path, batch_size, multiple_gpus)
@@ -564,6 +765,42 @@ def Diffusion_training(snapshot_folder_path, model_name, snapshot_name,
     
     if multiple_gpus:
         destroy_process_group()
+
+def sampling_test(noise_schedule, snapshot_folder_path, snapshot_name, VAE_weight_path, noise_steps, image_size, ema_smoothing,
+                         UNet_type, model_name, generate_video, dataset_path, batch_size, SAR_channels, NDVI_channels, device='cuda'):
+
+    snapshot_path = os.path.join(snapshot_folder_path, snapshot_name)
+    VAE_weight_path = os.path.join('..', 'models_run', VAE_weight_path)
+
+    vae_model = VAE_model_maker(device)
+    model = UNet_model_maker(UNet_type, SAR_channels, NDVI_channels, device)
+
+    diffusion = Diffusion(
+    noise_schedule=noise_schedule, model=model, vae_model=vae_model,
+    snapshot_path=snapshot_path,
+    VAE_weight_path=VAE_weight_path,
+    noise_steps=noise_steps, beta_start=1e-4, beta_end=0.02, device=device,
+    image_size=image_size, model_name=model_name,
+    multiple_gpus=False, ema_smoothing=ema_smoothing)
+
+    train_loader, val_loader = dataloader_PRE_encoding_maker(dataset_path=dataset_path, batch_size=batch_size, multiple_gpus=False)
+    train_dataset = train_loader.dataset
+
+    fig, axs = plt.subplots(5,3, figsize=(15,15))
+    for i in range(5):
+        SAR_img = train_dataset[i][0]
+        NDVI_img = train_dataset[i][1]
+
+        NDVI_pred_img = diffusion.sample(n=1,model=model, SAR_img=SAR_img, NDVI_channels=NDVI_channels, generate_video=generate_video)
+
+        axs[i,0].imshow(SAR_img[0].unsqueeze(0).permute(1,2,0).cpu().numpy())
+        axs[i,0].set_title('SAR image')
+        axs[i,1].imshow(NDVI_img.permute(1,2,0).cpu().numpy())
+        axs[i,1].set_title('NDVI image')
+        axs[i,2].imshow(NDVI_pred_img[0].permute(1,2,0).cpu().numpy())
+        axs[i,2].set_title('NDVI pred image')
+
+    plt.savefig(os.path.join(os.getcwd(), 'models_run', model_name, 'results', 'SAR_TO_NDVI_results.png'))
 
 def launch(args):
     '''
@@ -615,6 +852,7 @@ def launch(args):
     multiple_gpus = args.multiple_gpus
     ema_smoothing = args.ema_smoothing
     VAE_weight_path = args.VAE_weight_path
+    freeze_vae_params = args.freeze_vae_params
 
     
     if ema_smoothing:
@@ -637,48 +875,20 @@ def launch(args):
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         print('Using single GPU')
 
-    VAE_finetuning(dataset_path=dataset_path, image_size=image_size,
-                    batch_size=batch_size, multiple_gpus=multiple_gpus, 
-                        VAE_weight_path=VAE_weight_path, device=device)
+    # VAE_finetuning(dataset_path=dataset_path, image_size=image_size,
+    #                 batch_size=batch_size, multiple_gpus=multiple_gpus, 
+    #                     VAE_weight_path=VAE_weight_path, device=device, freeze_vae_params=freeze_vae_params)
 
-    # if multiple_gpus:
-    #     model = DDP(model, device_ids=[device], find_unused_parameters=True)
+    # Diffusion_training(snapshot_folder_path=snapshot_folder_path, model_name=model_name, snapshot_name=snapshot_name,
+    #                     noise_steps=noise_steps, ema_smoothing=ema_smoothing,
+    #                         UNet_type=UNet_type, SAR_channels=SAR_channels, NDVI_channels=NDVI_channels, 
+    #                             batch_size=batch_size, image_size=image_size, multiple_gpus=multiple_gpus, 
+    #                                 noise_schedule=noise_schedule, dataset_path=dataset_path, lr=lr,
+    #                                  epochs=epochs,check_preds_epoch=check_preds_epoch, patience=patience,
+    #                                   loss=loss, lr_scheduler=lr_scheduler, device=device)
 
-    # snapshot_path = os.path.join(snapshot_folder_path, snapshot_name)
-
-    # diffusion = Diffusion(
-    #     noise_schedule=noise_schedule, model=model,
-    #     snapshot_path=snapshot_path,
-    #     noise_steps=noise_steps, beta_start=1e-4, beta_end=0.02,device=device,
-    #     image_size=image_size, model_name=model_name,
-    #     multiple_gpus=multiple_gpus, ema_smoothing=ema_smoothing)
-
-    # # Training 
-    # diffusion.train(
-    #     lr=lr, epochs=epochs, check_preds_epoch=check_preds_epoch,
-    #     train_loader=train_loader, val_loader=val_loader, patience=patience, loss=loss,
-    #     lr_scheduler=lr_scheduler)
-    
-    # if multiple_gpus:
-    #     destroy_process_group()
-
-    # # Sampling
-    # fig, axs = plt.subplots(5,3, figsize=(15,15))
-    # for i in range(5):
-    #     SAR_img = train_dataset[i][0]
-    #     NDVI_img = train_dataset[i][1]
-
-    #     NDVI_pred_img = diffusion.sample(n=1,model=model, SAR_img=SAR_img, NDVI_channels=NDVI_channels, generate_video=generate_video)
-
-    #     axs[i,0].imshow(SAR_img[0].unsqueeze(0).permute(1,2,0).cpu().numpy())
-    #     axs[i,0].set_title('SAR image')
-    #     axs[i,1].imshow(NDVI_img.permute(1,2,0).cpu().numpy())
-    #     axs[i,1].set_title('NDVI image')
-    #     axs[i,2].imshow(NDVI_pred_img[0].permute(1,2,0).cpu().numpy())
-    #     axs[i,2].set_title('NDVI pred image')
-
-    # plt.savefig(os.path.join(os.getcwd(), 'models_run', model_name, 'results', 'SAR_TO_NDVI_results.png'))
-
+    # sampling_test(noise_schedule, snapshot_folder_path, snapshot_name, VAE_weight_path, noise_steps, image_size, ema_smoothing,
+    #                      UNet_type, model_name, generate_video, dataset_path, batch_size, SAR_channels, NDVI_channels, device='cuda')
 
 if __name__ == '__main__':
     import argparse  
@@ -708,6 +918,7 @@ if __name__ == '__main__':
     parser.add_argument('--multiple_gpus', type=str2bool, nargs='?', const=True, default=False)
     parser.add_argument('--ema_smoothing', type=str2bool, nargs='?', const=True, default=False)
     parser.add_argument('--VAE_weight_path', type=str, default=None)
+    parser.add_argument('--freeze_vae_params', type=str2bool, nargs='?', const=True, default=False)
     args = parser.parse_args()
     args.snapshot_folder_path = os.path.join(os.curdir, 'models_run', args.model_name, 'weights')
     launch(args)
