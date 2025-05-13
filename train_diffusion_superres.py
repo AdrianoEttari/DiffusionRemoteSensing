@@ -57,9 +57,10 @@ class Diffusion:
         self.magnification_factor = magnification_factor
         self.device = device
         self.multiple_gpus = multiple_gpus
-        self.VAE_weight_path = VAE_weight_path
 
+        self.VAE_weight_path = VAE_weight_path
         self.snapshot_path = snapshot_path
+
         self.Degradation_type=Degradation_type
         
         self.ema_smoothing = ema_smoothing
@@ -179,15 +180,14 @@ class Diffusion:
     def sample(self,n, model, lr_img, generate_video=False):
         '''
         As the name suggests this function is used for sampling. Therefore we want to 
-        loop backward (moreover, notice that in the sample we want to perform EVERY STEP CONTIGUOUSLY
-        while at training time we use the sample_timesteps() function to get just one random time step per batch).
+        loop backward. Moreover, notice that in the sample we want to perform EVERY STEP CONTIGUOUSLY
+        while at training time we use the sample_timesteps() function to get just one random time step per batch.
 
         What we do is to predict the noise conditioned by the time step and by the low resolution image.
 
         Input:
             n: the number of images we want to sample
             lr_img: the low resolution image
-            input_channels: the number of input channels
             generate_video: if True, the function will produce a video with the generated NDVI images.
         
         Output:
@@ -221,7 +221,7 @@ class Diffusion:
                 t = torch.full((n,), i, dtype=torch.long, device=self.device) # tensor of shape (n) with all the elements equal to i.
                 # Basically, each of the n image will be processed with the same integer time step t.
 
-                predicted_noise = model(x, t, lr_img, self.magnification_factor)
+                predicted_noise = model(x, t, lr_img, self.magnification_factor).to(self.device)
 
                 alpha = self.alpha[t].reshape(shape_)
                 alpha_hat = self.alpha_hat[t].reshape(shape_)
@@ -365,15 +365,10 @@ class Diffusion:
         print("Fine-tuning VAE...")
         device = self.device
         vae = self.vae_model
-        # save_path = self.VAE_weight_path_HR
-        # save_path = self.VAE_weight_path_LR
         save_path = self.VAE_weight_path
 
         optimizer = torch.optim.AdamW(vae.parameters(), lr=learning_rate)
 
-        # perceptual_loss_fn = PerceptualLoss(device=device)
-        # mse_loss_fn = torch.nn.MSELoss()
-        # loss_fn = CombinedLoss(perceptual_loss_fn, mse_loss_fn, alpha=0.5, device=device)
         loss_fn = vae_loss(device=device, lambda_rec=1.0, lambda_latent=0.5)
 
         vae.train()
@@ -385,20 +380,11 @@ class Diffusion:
             for i,(lr_images,hr_images) in enumerate(pbar_dataloader):
                 lr_images = torch.stack([img for img in lr_images]).to(device).to(torch.float32)
                 hr_images = torch.stack([img for img in hr_images]).to(device).to(torch.float32)
-                lr_images = F.interpolate(lr_images.to('cpu'), scale_factor=self.magnification_factor, mode='bicubic').to(self.device)
 
-                # if self.multiple_gpus:
-                    # latents = self.vae_model_HR.module.encode(hr_images).latent_dist.sample()
-                    # latents = self.vae_model_LR.module.encode(lr_images).latent_dist.sample()
-                    # reconstructed_images = self.vae_model_HR.module.decode(latents).sample
-                    # reconstructed_images = self.vae_model_LR.module.decode(latents).sample
-                # else:
-                    # latents = self.vae_model_HR.encode(hr_images).latent_dist.sample()
-                    # latents = self.vae_model_LR.encode(lr_images).latent_dist.sample()
-                    # reconstructed_images = self.vae_model_HR.decode(latents).sample
-                    # reconstructed_images = self.vae_model_LR.decode(latents).sample
-                # loss = loss_fn(reconstructed_images, hr_images)
-                # loss = loss_fn(reconstructed_images, lr_images)
+                if lr_images.device not in ['mps']:
+                    lr_images = F.interpolate(lr_images, scale_factor=self.magnification_factor, mode='bicubic')
+                else:
+                    lr_images = F.interpolate(lr_images.to('cpu'), scale_factor=self.magnification_factor, mode='bicubic').to(self.device)
                 
                 if self.multiple_gpus:
                     latents_lr = self.vae_model.module.encode(lr_images).latent_dist.sample()
@@ -412,6 +398,7 @@ class Diffusion:
                     reconstructed_hr = self.vae_model.decode(latents_hr).sample
                         
                 loss = loss_fn(x_LR=lr_images, x_HR=hr_images, latents_lr=latents_lr, latents_hr=latents_hr, reconstructed_lr=reconstructed_lr, reconstructed_hr=reconstructed_hr)
+
                 # gradient accumulation 
                 if lr_images.shape[0] < 8: # If the batch size is smaller than 8 then use gradient accumulation
                     loss = loss/4
@@ -863,7 +850,7 @@ class vae_loss(nn.Module):
         latent_loss = F.mse_loss(latents_lr, latents_hr)
         return latent_loss 
 
-def dataloader_PRE_encoding_maker(dataset_path, Degradation_type, image_size, magnification_factor, Blur_radius, num_crops, batch_size, multiple_gpus):
+def dataloader_PRE_encoding_maker(dataset_path, Degradation_type, image_size, magnification_factor, Blur_radius, num_crops=1, batch_size=16, multiple_gpus=False):
     if Degradation_type.lower() == 'downblur':
         if image_size % magnification_factor != 0:
             raise ValueError('The image size must be a multiple of the magnification factor')
@@ -974,11 +961,10 @@ def super_resolution_sampling(diffusion_class, UNet_model, lr_img, generate_vide
 def VAE_model_maker(device):
     vae_model_path = "CompVis/stable-diffusion-v1-4"
     pipe = StableDiffusionPipeline.from_pretrained(vae_model_path)
-    vae_model = pipe.vae
     vae_model = pipe.vae.to(device)
     return vae_model
 
-def VAE_finetuning(dataset_path, Degradation_type, image_size, magnification_factor, Blur_radius, num_crops, batch_size, multiple_gpus, VAE_weight_path, device):
+def VAE_finetuning(dataset_path, Degradation_type, image_size, magnification_factor, Blur_radius, VAE_weight_path, num_crops=1, batch_size=16, multiple_gpus=False, device='cuda'):
 
     train_loader, val_loader = dataloader_PRE_encoding_maker(dataset_path=dataset_path, Degradation_type=Degradation_type,
                                                  image_size=image_size, magnification_factor=magnification_factor,
@@ -988,8 +974,6 @@ def VAE_finetuning(dataset_path, Degradation_type, image_size, magnification_fac
         
     if multiple_gpus:
         vae_model = DDP(vae_model, device_ids=[device], find_unused_parameters=True) 
-
-    VAE_weight_path = os.path.join(os.curdir, 'models_run', VAE_weight_path)
 
     diffusion = Diffusion(
         noise_schedule=None, model=None, vae_model=vae_model,
@@ -1047,7 +1031,8 @@ def Diffusion_training(snapshot_folder_path, model_name, snapshot_name,
         magnification_factor=magnification_factor,device=device,
         image_size=image_size, model_name=model_name, Degradation_type=None,
         multiple_gpus=multiple_gpus, ema_smoothing=ema_smoothing)
-        
+    
+    assert "_encoded" in dataset_path, "The dataset path must contain '_encoded' in the name"
     encoded_images_train_save_path = os.path.join(dataset_path, "train_original")
     encoded_images_val_save_path = os.path.join(dataset_path, "val_original")
 
@@ -1064,54 +1049,12 @@ def Diffusion_training(snapshot_folder_path, model_name, snapshot_name,
     if multiple_gpus:
         destroy_process_group()
 
-def Diffusion_finetune_pretrained_UNet(snapshot_folder_path, model_name, snapshot_name,
-                        noise_steps, ema_smoothing, magnification_factor,  
-                                batch_size, image_size, multiple_gpus, 
-                                    noise_schedule, dataset_path, lr,
-                                     epochs,check_preds_epoch, patience,
-                                      loss, lr_scheduler, device):
-
-    os.makedirs(snapshot_folder_path, exist_ok=True)
-    os.makedirs(os.path.join(os.curdir, 'models_run', model_name, 'results'), exist_ok=True)
-
-    model_path = "CompVis/stable-diffusion-v1-4"
-    model = UNet2DConditionModel.from_pretrained(model_path, subfolder="unet").to(device)
-
-    if multiple_gpus:
-        model = DDP(model, device_ids=[device], find_unused_parameters=True)
-
-    snapshot_path = os.path.join(snapshot_folder_path, snapshot_name)
-
-    diffusion = Diffusion(
-        noise_schedule=noise_schedule, model=model, vae_model=None,
-        snapshot_path=snapshot_path,
-        VAE_weight_path=None,
-        noise_steps=noise_steps, beta_start=1e-4, beta_end=0.02, 
-        magnification_factor=magnification_factor,device=device,
-        image_size=image_size, model_name=model_name, Degradation_type=None,
-        multiple_gpus=multiple_gpus, ema_smoothing=ema_smoothing)
-
-    encoded_images_train_save_path = os.path.join(dataset_path, "train_original")
-    encoded_images_val_save_path = os.path.join(dataset_path, "val_original")
-
-    ########## CREATE DATALOADERS FOR THE POST-ENCODING MODEL ##########
-    train_loader = dataloader_POST_encoding_maker(encoded_images_train_save_path, batch_size, multiple_gpus)
-    # val_loader = dataloader_POST_encoding_maker(encoded_images_val_save_path, batch_size, multiple_gpus)
-    val_loader = None
-    ########## TRAIN DIFFUSION MODEL ##########
-    diffusion.fine_tuning_UNet(model=model, lr=lr, epochs=epochs, check_preds_epoch=check_preds_epoch,
-                                train_loader=train_loader, val_loader=val_loader, 
-                                patience=patience, loss=loss, lr_scheduler=lr_scheduler)
-    
-    if multiple_gpus:
-        destroy_process_group()
-
 def sampling_test(snapshot_folder_path, model_name, snapshot_name, UNet_type,
               input_channels, output_channels, image_size, 
               noise_schedule, noise_steps, magnification_factor,
-              Degradation_type, dataset_path, Blur_radius,
-              num_crops, batch_size, generate_video,
-            VAE_weight_path, device):
+              Degradation_type, dataset_path, Blur_radius, VAE_weight_path,
+              num_crops=None, generate_video=False,
+             device='cuda'):
     
     model = UNet_model_maker(UNet_type, input_channels, output_channels, device, image_size)
     print("Num params: ", sum(p.numel() for p in model.parameters()))
@@ -1119,8 +1062,6 @@ def sampling_test(snapshot_folder_path, model_name, snapshot_name, UNet_type,
     vae_model = VAE_model_maker(device)
 
     snapshot_path = os.path.join(snapshot_folder_path, snapshot_name)
-
-    VAE_weight_path = os.path.join(os.curdir, 'models_run', VAE_weight_path)
 
     diffusion = Diffusion(
         noise_schedule=noise_schedule, model=model, vae_model=vae_model,
@@ -1133,7 +1074,7 @@ def sampling_test(snapshot_folder_path, model_name, snapshot_name, UNet_type,
 
     train_loader, val_loader = dataloader_PRE_encoding_maker(dataset_path=dataset_path, Degradation_type=Degradation_type,
                                                  image_size=image_size, magnification_factor=magnification_factor,
-                                                   Blur_radius=Blur_radius, num_crops=num_crops, batch_size=batch_size, 
+                                                   Blur_radius=Blur_radius, num_crops=num_crops, batch_size=1, 
                                                     multiple_gpus=False)
     ######### SAMPLING ##########
     fig, axs = plt.subplots(5,5, figsize=(15,15))
@@ -1239,12 +1180,11 @@ def launch(args):
         torch.cuda.set_device(int(device))
     else:
         device = torch.device('cuda' if torch.cuda.is_available() else 'mps' if torch.backends.mps.is_available() else 'cpu')
-        print(f'Using single GPU: {device}')
+        print(f'Using single device: {device}')
 
-    # VAE_finetuning(dataset_path=dataset_path, Degradation_type=Degradation_type, image_size=image_size,
-    #                 magnification_factor=magnification_factor, Blur_radius=Blur_radius, num_crops=num_crops,
-    #                     batch_size=batch_size, multiple_gpus=multiple_gpus, 
-    #                         VAE_weight_path=VAE_weight_path, device=device)
+    VAE_finetuning(dataset_path=dataset_path, Degradation_type=Degradation_type, image_size=image_size,
+                    magnification_factor=magnification_factor, Blur_radius=Blur_radius,VAE_weight_path=VAE_weight_path, num_crops=num_crops,
+                        batch_size=batch_size, multiple_gpus=multiple_gpus, device=device)
     
     # Diffusion_training(snapshot_folder_path=snapshot_folder_path, model_name=model_name, snapshot_name=snapshot_name,
     #                     noise_steps=noise_steps, ema_smoothing=ema_smoothing, magnification_factor=magnification_factor,  
@@ -1254,19 +1194,10 @@ def launch(args):
     #                                  epochs=epochs,check_preds_epoch=check_preds_epoch, patience=patience,
     #                                   loss=loss, lr_scheduler=lr_scheduler, device=device)
     
-    # Diffusion_finetune_pretrained_UNet(snapshot_folder_path, model_name, snapshot_name,
-    #                     noise_steps, ema_smoothing, magnification_factor,  
-    #                             batch_size, image_size, multiple_gpus, 
-    #                                 noise_schedule, dataset_path, lr,
-    #                                  epochs,check_preds_epoch, patience,
-    #                                   loss, lr_scheduler, device)
-    
-    sampling_test(snapshot_folder_path=snapshot_folder_path, model_name=model_name, snapshot_name=snapshot_name, UNet_type=UNet_type,
-                    input_channels=input_channels, output_channels=output_channels, image_size=image_size, 
-                        noise_schedule=noise_schedule, noise_steps=noise_steps, magnification_factor=magnification_factor,
-                            Degradation_type=Degradation_type, dataset_path=dataset_path, Blur_radius=Blur_radius,
-                                num_crops=num_crops, batch_size=batch_size, generate_video=generate_video,
-                                  VAE_weight_path=VAE_weight_path, device=device)
+    # sampling_test(snapshot_folder_path=snapshot_folder_path, model_name=model_name,                     snapshot_name=snapshot_name, UNet_type=UNet_type,
+    #                 input_channels=input_channels, output_channels=output_channels, image_size=image_size, 
+    #                     noise_schedule=noise_schedule, noise_steps=noise_steps, magnification_factor=magnification_factor,
+    #                         Degradation_type=Degradation_type, dataset_path=dataset_path, Blur_radius=Blur_radius, VAE_weight_path=VAE_weight_path, generate_video=generate_video, device=device)
 
 
 if __name__ == '__main__':
@@ -1305,4 +1236,10 @@ if __name__ == '__main__':
         args.snapshot_folder_path = os.path.join(os.curdir, 'models_run', args.model_name, 'weights')
     else:
         args.snapshot_folder_path = None
+
+    if args.VAE_weight_path:
+        args.VAE_weight_path = os.path.join('models_run', args.VAE_weight_path)
+    else:
+        args.VAE_weight_path = None
+
     launch(args)

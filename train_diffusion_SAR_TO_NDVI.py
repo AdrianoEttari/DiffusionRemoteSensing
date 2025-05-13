@@ -64,6 +64,7 @@ class Diffusion:
 
         # epoch_run is used by _save_snapshot and _load_snapshot to keep track of the current epoch
         self.epochs_run = 0
+
         # If a snapshot exists, we load it
         if snapshot_path:
             if os.path.exists(snapshot_path):
@@ -167,18 +168,17 @@ class Diffusion:
         '''
         return torch.randint(low=1, high=self.noise_steps, size=(n,))
     
-    def sample(self, n, model, SAR_img, NDVI_channels=1, generate_video=False):
+    def sample(self, n, model, SAR_img, generate_video=False):
         '''
         As the name suggests this function is used for sampling. Therefore we want to 
-        loop backward (moreover, notice that in the sample we want to perform EVERY STEP CONTIGUOUSLY,
-        while at training time we use the sample_timesteps() function to get just one random time step per batch).
+        loop backward. Moreover, notice that in the sample we want to perform EVERY STEP CONTIGUOUSLY,
+        while at training time we use the sample_timesteps() function to get just one random time step per batch.
 
         What we do is to predict the noise conditioned by the time step and by the SAR image.
 
         Input:
             n: the number of images we want to sample
-            SAR_img: the SAR_img (shaped (SAR_channels, self.image_size, self.image_size))
-            NDVI_channels: the number of NDVI channels  
+            SAR_img: the SAR_img (shaped (SAR_channels, self.image_size, self.image_size)) 
             generate_video: if True, the function will produce a video with the generated NDVI images.
         
         Output:
@@ -186,33 +186,52 @@ class Diffusion:
         '''
         SAR_img = SAR_img.to(self.device).unsqueeze(0)
 
-        frames = [] # used to store the frames if we want to generate a video
         model.eval() # disables dropout and batch normalization
         with torch.no_grad(): # disables gradient calculation
-            x = torch.randn((n, NDVI_channels, self.image_size, self.image_size))
-            x = x.to(self.device) 
+            x = torch.randn((n, 4, self.image_size//8, self.image_size//8), device=self.device)
+
+            frames = [] if generate_video else None  # Only allocate memory if needed
+
+            shape_ = (n, 1, 1, 1)
             for i in tqdm(reversed(range(1, self.noise_steps)), position=0): 
-                t = (torch.ones(n) * i).long().to(self.device) # tensor of shape (n) with all the elements equal to i.
+                t = torch.full((n,), i, dtype=torch.long, device=self.device) # tensor of shape (n) with all the elements equal to i.
                 # Basically, each of the n image will be processed with the same integer time step t.
 
                 predicted_noise = model(x, t, SAR_img)
 
-                alpha = self.alpha[t][:, None, None, None]
-                alpha_hat = self.alpha_hat[t][:, None, None, None]
-                beta = self.beta[t][:, None, None, None]
-                if i > 1:
-                    # If i>1 then we add noise to the image we have sampled (remember that from x_t we sample x_{t-1}).
-                    # If i==1 we sample x_0, which is the final image we want to generate, so we don't add noise.
-                    noise = torch.randn_like(x)
-                else:
-                    noise = torch.zeros_like(x) # we don't add noise in the last time step because it would just make the final outcome worse.
+                alpha = self.alpha[t].reshape(shape_)
+                alpha_hat = self.alpha_hat[t].reshape(shape_)
+                beta = self.beta[t].reshape(shape_)
+
+                # If i>1 then we add noise to the image we have sampled (remember that from x_t we sample x_{t-1}).
+                # If i==1 we sample x_0, which is the final image we want to generate, so we don't add noise.
+                noise = torch.randn_like(x) if i > 1 else torch.zeros_like(x)
+
                 x = 1 / torch.sqrt(alpha) * (x - ((1 - alpha) / (torch.sqrt(1 - alpha_hat))) * predicted_noise) + torch.sqrt(beta) * noise
                 if generate_video == True:
                     frames.append(x)
         if generate_video == True:
             video_maker(frames, os.path.join(os.getcwd(), 'models_run', self.model_name, 'results', 'video_denoising.mp4'), 100)
+            del frames
+
+        latent_NDVI_img = x
+        latent_SAR_img = SAR_img
+
+        # Delete unnecessary tensors to remove references
+        del SAR_img, x, frames, predicted_noise, noise  
+
+        # Force Python garbage collection
+        gc.collect()
+
+        # Free unused GPU memory
+        torch.cuda.empty_cache()
+
+        # Perform inference without gradient tracking to save VRAM
+        with torch.no_grad():
+            NDVI_pred_img = self.vae_model.decode(latent_NDVI_img).sample
+        
         model.train() # enables dropout and batch normalization
-        return x
+        return NDVI_pred_img
 
     def _save_snapshot(self, epoch, model):
         '''
@@ -328,10 +347,8 @@ class Diffusion:
         loss_fn = vae_loss(device=device, lambda_rec=1.0, lambda_latent=0.5)
 
         vae.train()
-
         for epoch in range(epochs):
             pbar_dataloader = tqdm(dataloader, desc='Fine-tuning VAE', position=0)
-
             if self.multiple_gpus:
                 pbar_dataloader.sampler.set_epoch(epoch) 
             total_loss = 0
@@ -399,6 +416,7 @@ class Diffusion:
                 else:
                     SAR_img = self.vae_model.encode(SAR_img).latent_dist.sample()
                     NDVI_img = self.vae_model.encode(NDVI_img).latent_dist.sample()
+
                 for idx in range(SAR_img.shape[0]):
                     unique_id = uuid.uuid4().hex
                     SAR_img_to_save = SAR_img[idx].permute(1,2,0).detach().cpu().numpy()
@@ -481,11 +499,9 @@ class Diffusion:
                 x_t, noise = self.noise_images(NDVI_img, t) # get the noisy images
 
                 optimizer.zero_grad() # set the gradients to 0
-
                 predicted_noise = model(x_t, t, SAR_img) 
 
                 train_loss = loss_function(predicted_noise, noise)
-                
                 train_loss.backward() # compute the gradients
                 optimizer.step() # update the weights
                 
@@ -576,7 +592,6 @@ class Diffusion:
         for i in range(5):
             SAR_img = data_loader.dataset[i][0].to(self.device)
             NDVI_img = data_loader.dataset[i][1].to(self.device)
-
 
             NDVI_pred_img = self.sample(n=1,model=model, SAR_img=SAR_img, NDVI_channels=1, generate_video=False)
             
@@ -694,8 +709,6 @@ def VAE_finetuning(dataset_path, image_size, batch_size, multiple_gpus, VAE_weig
         
     if multiple_gpus:
         vae_model = DDP(vae_model, device_ids=[device], find_unused_parameters=True) 
-
-    VAE_weight_path = os.path.join(os.curdir, 'models_run', VAE_weight_path)
     
     diffusion = Diffusion(
         noise_schedule=None, model=None, vae_model=vae_model,
@@ -705,7 +718,7 @@ def VAE_finetuning(dataset_path, image_size, batch_size, multiple_gpus, VAE_weig
         image_size=image_size, model_name=None,
         multiple_gpus=multiple_gpus, ema_smoothing=None)
         
-    diffusion.fine_tuning_VAE(train_loader, epochs=15, learning_rate=1e-4)
+    diffusion.fine_tuning_VAE(train_loader, epochs=15, learning_rate=1e-4) # epochs=15 for the Conv2d training, 50 for the VAE finetuning
 
     if not freeze_vae_params: # we freeze the parameters just to train the conv layer, before finetuning the VAE
         ########## ENCODE DATASET AND SAVE IT ##########
@@ -770,7 +783,6 @@ def sampling_test(noise_schedule, snapshot_folder_path, snapshot_name, VAE_weigh
                          UNet_type, model_name, generate_video, dataset_path, batch_size, SAR_channels, NDVI_channels, device='cuda'):
 
     snapshot_path = os.path.join(snapshot_folder_path, snapshot_name)
-    VAE_weight_path = os.path.join('..', 'models_run', VAE_weight_path)
 
     vae_model = VAE_model_maker(device)
     model = UNet_model_maker(UNet_type, SAR_channels, NDVI_channels, device)
@@ -920,5 +932,14 @@ if __name__ == '__main__':
     parser.add_argument('--VAE_weight_path', type=str, default=None)
     parser.add_argument('--freeze_vae_params', type=str2bool, nargs='?', const=True, default=False)
     args = parser.parse_args()
-    args.snapshot_folder_path = os.path.join(os.curdir, 'models_run', args.model_name, 'weights')
+
+    if args.model_name:
+        args.snapshot_folder_path = os.path.join(os.curdir, 'models_run', args.model_name, 'weights')
+    else:
+        args.snapshot_folder_path = None
+
+    if args.VAE_weight_path:
+        args.VAE_weight_path = os.path.join('models_run', args.VAE_weight_path)
+    else:
+        args.VAE_weight_path = None
     launch(args)

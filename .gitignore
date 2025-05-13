@@ -174,7 +174,7 @@ models_run/Residual_Attention_UNet_superres_magnification4_LRimgsize64_celeb50k_
 models_run/Residual_Attention_UNet_superres_magnification4_LRimgsize64_up42_sentinel2_patches_downblur_StableDiffusion_LRandHR_gradientAccumulation
 
 OLD/
-
+WRONG-OLD/
 
 Napoli_sentinel2/
 celebA_*/

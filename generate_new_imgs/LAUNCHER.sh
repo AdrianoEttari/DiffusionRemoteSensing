@@ -4,7 +4,7 @@
 
 model_name="TO_REMOVE"
 
-VAE_model_name="VAE_102flowers_finetuning_gradientAccumulation"
+VAE_model_name="VAE_102flowers_finetuning_gradientAccumulation.pt"
 
 ###### FINETUNING VAE ######
 dataset_path="102flowers_dataset"

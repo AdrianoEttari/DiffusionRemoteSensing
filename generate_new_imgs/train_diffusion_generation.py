@@ -10,7 +10,7 @@ from utils import video_maker, CosineAnnealingWarmupRestarts, dataset_maker
 import numpy as np
 import torchvision.datasets as datasets
 
-from generate_new_imgs.UNet_model_generation_CrossAttention import Residual_Attention_UNet_generation,EMA
+from UNet_model_generation_CrossAttention import Residual_Attention_UNet_generation,EMA
 # from UNet_model_generation_VMHA import Residual_Attention_UNet_generation, Residual_DiffiT_UNet_generation, EMA
 
 import torch.nn.functional as F
@@ -54,9 +54,10 @@ class Diffusion:
         self.model_name = model_name
         self.device = device
         self.multiple_gpus = multiple_gpus
-        self.VAE_weight_path = VAE_weight_path
 
+        self.VAE_weight_path = VAE_weight_path
         self.snapshot_path = snapshot_path
+
         self.ema_smoothing = ema_smoothing
 
         if model:
@@ -67,11 +68,17 @@ class Diffusion:
 
         # epoch_run is used by _save_snapshot and _load_snapshot to keep track of the current epoch
         self.epochs_run = 0
+
         # If a snapshot exists, we load it
         if snapshot_path:
             if os.path.exists(snapshot_path):
                 print("Loading snapshot")
                 self._load_snapshot()
+
+        if VAE_weight_path:
+            if os.path.exists(self.VAE_weight_path):
+                print(f"Loading fine-tuned VAE model from {self.VAE_weight_path}...")
+                self._load_snapshot_VAE(self.VAE_weight_path, self.vae_model)
 
         self.noise_schedule = noise_schedule
 
@@ -85,11 +92,6 @@ class Diffusion:
             self.alpha_hat = self.prepare_noise_schedule().to(self.device)
             self.beta = self.from_alpha_hat_to_beta()
             self.alpha = 1. - self.beta
-
-        if VAE_weight_path:
-            if os.path.exists(self.VAE_weight_path):
-                print(f"Loading fine-tuned VAE model from {self.VAE_weight_path}...")
-                self._load_snapshot_VAE(self.VAE_weight_path, self.vae_model)
 
     def from_alpha_hat_to_beta(self):
         '''
@@ -170,13 +172,13 @@ class Diffusion:
         '''
         return torch.randint(low=1, high=self.noise_steps, size=(n,))
     
-    def sample(self, n, model, target_class=None, cfg_scale=3, input_channels=3, generate_video=False):
+    def sample(self, n, model, target_class=None, cfg_scale=3, generate_video=False):
         '''
         As the name suggests this function is used for sampling. Therefore we want to 
-        loop backward (moreover, notice that in the sample we want to perform EVERY STEP CONTIGUOUSLY
-        while at training time we use the sample_timesteps() function to get just one random time step per batch).
+        loop backward. Moreover, notice that in the sample we want to perform EVERY STEP CONTIGUOUSLY
+        while at training time we use the sample_timesteps() function to get just one random time step per batch.
 
-        What we do is to predict the noise conditionally, then if the cfg_scale is > 0,
+        What we do is to predict the noise conditionally to an image class, then if the cfg_scale is > 0,
         we also predict the noise unconditionally. Eventually, we apply the formula
         out of the CFG paper using the torch.lerp function which does exactly the same
 
@@ -188,7 +190,6 @@ class Diffusion:
             n: the number of images we want to sample
             target_class: the target class for the images
             cfg_scale: the scale of the CFG noise
-            input_channels: the number of input channels
             generate_video: if True, the function will produce a video with the generated NDVI images.
         
         Output:
@@ -197,8 +198,7 @@ class Diffusion:
 
         model.eval() # disables dropout and batch normalization
         with torch.no_grad(): # disables gradient calculation
-
-            x = torch.randn((n, input_channels, self.image_size//8, self.image_size//8)).to(self.device)
+            x = torch.randn((n, 4, self.image_size//8, self.image_size//8), device=self.device)
             frames = [] if generate_video else None  # Only allocate memory if needed
 
             shape_ = (n, 1, 1, 1)
@@ -224,6 +224,7 @@ class Diffusion:
                 x = 1 / torch.sqrt(alpha) * (x - ((1 - alpha) / (torch.sqrt(1 - alpha_hat))) * predicted_noise) + torch.sqrt(beta) * noise
                 if generate_video:
                     frames.append(x.clone().detach().cpu())
+
         if generate_video:
             video_maker(frames, os.path.join(os.getcwd(), 'models_run', self.model_name, 'results', 'video_denoising.mp4'), 100)
             del frames
@@ -377,6 +378,7 @@ class Diffusion:
                     reconstructed = self.vae_model.decode(latents).sample
                         
                 loss = loss_fn(x=img, reconstructed=reconstructed) # loss is the reconstruction loss (L1 + LPIPS)
+
                 # gradient accumulation 
                 if img.shape[0] < 8: # If the batch size is smaller than 8 then use gradient accumulation
                     loss = loss/4
@@ -652,20 +654,17 @@ def dataloader_POST_encoding_maker(dataset_path, image_size, batch_size, multipl
 def VAE_model_maker(device):
     vae_model_path = "CompVis/stable-diffusion-v1-4"
     pipe = StableDiffusionPipeline.from_pretrained(vae_model_path)
-    vae_model = pipe.vae
     vae_model = pipe.vae.to(device)
     return vae_model
 
 def VAE_finetuning(dataset_path, image_size, batch_size, multiple_gpus, VAE_weight_path, device):
 
-    train_loader, num_classes = dataloader_PRE_encoding_maker(dataset_path=dataset_path, image_size=image_size,
-                                                   batch_size=batch_size, multiple_gpus=multiple_gpus)
+    train_loader, num_classes = dataloader_PRE_encoding_maker(dataset_path=dataset_path, image_size=image_size, batch_size=batch_size, multiple_gpus=multiple_gpus)
+    
     vae_model = VAE_model_maker(device)
         
     if multiple_gpus:
         vae_model = DDP(vae_model, device_ids=[device], find_unused_parameters=True) 
-
-    VAE_weight_path = os.path.join(os.curdir, 'models_run', VAE_weight_path)
 
     diffusion = Diffusion(
         noise_schedule=None, model=None, vae_model=vae_model,
@@ -675,10 +674,10 @@ def VAE_finetuning(dataset_path, image_size, batch_size, multiple_gpus, VAE_weig
         device=device, image_size=image_size, model_name=None,
         multiple_gpus=multiple_gpus, ema_smoothing=None)
         
-    diffusion.fine_tuning_VAE(train_loader, epochs=10, learning_rate=1e-4)
+    diffusion.fine_tuning_VAE(train_loader, epochs=50, learning_rate=1e-4)
 
     ########## ENCODE DATASET AND SAVE IT ##########
-    encoded_images_train_save_path = os.path.join(dataset_path+'_VAE_encoded', "train_original")
+    encoded_images_train_save_path = os.path.join(dataset_path+'_VAE_encoded')
     if os.path.exists(os.path.join(encoded_images_train_save_path, 'img')):
         if len(os.listdir(os.path.join(encoded_images_train_save_path, 'img'))) == 0:
             diffusion.encoded_dataset_VAE(dataloader=train_loader, save_path=encoded_images_train_save_path)
@@ -714,7 +713,6 @@ def generation_sampling(noise_schedule, snapshot_folder_path, snapshot_name, VAE
         num_rows_plot = num_classes
 
     snapshot_path = os.path.join(snapshot_folder_path, snapshot_name)
-    VAE_weight_path = os.path.join('..', 'models_run', VAE_weight_path)
 
     vae_model = VAE_model_maker(device)
 
@@ -748,7 +746,7 @@ def Diffusion_training(snapshot_folder_path, model_name, snapshot_name,
     os.makedirs(os.path.join('..', 'models_run', model_name, 'results'), exist_ok=True)
 
     ########## CREATE DATALOADERS FOR THE POST-ENCODING MODEL ##########
-    encoded_images_train_save_path = os.path.join(dataset_path, "train_original")
+    encoded_images_train_save_path = os.path.join(dataset_path)
     train_loader, num_classes = dataloader_POST_encoding_maker(dataset_path=encoded_images_train_save_path, image_size=image_size, batch_size=batch_size, multiple_gpus=multiple_gpus)
     val_loader = None
 
@@ -766,9 +764,9 @@ def Diffusion_training(snapshot_folder_path, model_name, snapshot_name,
         noise_steps=noise_steps, beta_start=1e-4, beta_end=0.02,
         device=device, image_size=image_size, model_name=model_name,
         multiple_gpus=multiple_gpus, ema_smoothing=ema_smoothing)
+
+    assert "_encoded" in dataset_path, "The dataset path must contain '_encoded' in the name"
     
-
-
     ########## TRAIN DIFFUSION MODEL ##########
     diffusion.train(
         lr=lr, epochs=epochs, check_preds_epoch=check_preds_epoch,
@@ -841,14 +839,14 @@ def launch(args):
         torch.cuda.set_device(int(device))
     else:
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        print('Using a single GPU')
+        print(f'Using device: {device}')
 
     if lr_scheduler and lr_scheduler.lower() != 'none':
         print(f'Using {lr_scheduler} learning rate scheduler')
 
-    # VAE_finetuning(dataset_path=dataset_path, image_size=image_size,
-    #                     batch_size=batch_size, multiple_gpus=multiple_gpus, 
-    #                         VAE_weight_path=VAE_weight_path, device=device)
+    VAE_finetuning(dataset_path=dataset_path, image_size=image_size,
+                        batch_size=batch_size, multiple_gpus=multiple_gpus, 
+                            VAE_weight_path=VAE_weight_path, device=device)
 
     # Diffusion_training(snapshot_folder_path=snapshot_folder_path, model_name=model_name, snapshot_name=snapshot_name,
     #                     noise_steps=noise_steps, ema_smoothing=ema_smoothing,
@@ -894,4 +892,13 @@ if __name__ == '__main__':
         args.snapshot_folder_path = os.path.join('..', 'models_run', args.model_name, 'weights')
     else:
         args.snapshot_folder_path = None
+
+    if args.VAE_weight_path:
+        args.VAE_weight_path = os.path.join('..', 'models_run', args.VAE_weight_path, 'weights')
+    else:
+        args.VAE_weight_path = None
+
     launch(args)
+
+
+    
