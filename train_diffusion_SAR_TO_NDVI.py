@@ -716,10 +716,12 @@ def VAE_finetuning(dataset_path, image_size, batch_size, multiple_gpus, VAE_weig
         noise_steps=None, beta_start=None, beta_end=None, device=device,
         image_size=image_size, model_name=None,
         multiple_gpus=multiple_gpus, ema_smoothing=None)
-        
-    diffusion.fine_tuning_VAE(train_loader, epochs=15, learning_rate=1e-4) # epochs=15 for the Conv2d training, 50 for the VAE finetuning
+    
+    if freeze_vae_params: # we freeze the parameters just to train the conv layer, before finetuning the VAE
+        diffusion.fine_tuning_VAE(train_loader, epochs=15, learning_rate=1e-4) # epochs=15 for the Conv2d training, 50 for the VAE finetuning
+    else:
+        diffusion.fine_tuning_VAE(train_loader, epochs=50, learning_rate=1e-4)
 
-    if not freeze_vae_params: # we freeze the parameters just to train the conv layer, before finetuning the VAE
         ########## ENCODE DATASET AND SAVE IT ##########
         encoded_images_train_save_path = os.path.join(dataset_path+'_VAE_encoded', "train")
         encoded_images_val_save_path = os.path.join(dataset_path+'_VAE_encoded', "val")
