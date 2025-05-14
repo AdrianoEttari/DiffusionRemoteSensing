@@ -243,15 +243,14 @@ import torch
 from torchvision import transforms, models
 from torch.utils.data import DataLoader
 from utils import get_data_superres, get_data_superres_BSRGAN, video_maker, CosineAnnealingWarmupRestarts
-from UNet_model_superres_VMHA import Residual_Attention_UNet_superres, Residual_VisionMultiheadAttention_UNet_superres, Residual_DiffiT_UNet_superres, EMA
-from ViT_model import ViTModel
+from UNet_model_superres_CrossAttention import Residual_CrossAttention_UNet_superres
 from diffusers import StableDiffusionPipeline
 from PIL import Image
 import numpy as np
 
 model_path = "CompVis/stable-diffusion-v1-4"
-snapshot_path = os.path.join('models_run','VAE_up42_LRandHR_finetuning')
-device = 'mps'
+snapshot_path = os.path.join('models_run','VAE_up42_LRandHR_finetuning_gradientAccumulation.pt')
+device = 'cuda'
 pipe = StableDiffusionPipeline.from_pretrained(model_path)
 vae_model = pipe.vae
 vae_model = vae_model.eval()
@@ -266,6 +265,9 @@ def psnr(ground_truth, predicted, pixel_max=255):
     '''
     Compute the Peak Signal to Noise Ratio between the real mask and the predicted one.
 
+    PSNR = 10 * log10((pixel_max^2) / MSE) is a metric used to measure the quality
+    of reconstruction of an image compared to its original version.
+    
     The masks must be float32 and not uint8, because the second is 8 bit and so 
     has just values between 0 and 255.
     '''

@@ -984,7 +984,7 @@ def VAE_finetuning(dataset_path, Degradation_type, image_size, magnification_fac
         image_size=image_size, model_name=None, Degradation_type=Degradation_type,
         multiple_gpus=multiple_gpus, ema_smoothing=None)
         
-    diffusion.fine_tuning_VAE(train_loader, epochs=10, learning_rate=1e-4)
+    diffusion.fine_tuning_VAE(train_loader, epochs=40, learning_rate=1e-4)
 
     ########## ENCODE DATASET AND SAVE IT ##########
     encoded_images_train_save_path = os.path.join(dataset_path+'_VAE_encoded', "train_original")
@@ -1182,17 +1182,17 @@ def launch(args):
         device = torch.device('cuda' if torch.cuda.is_available() else 'mps' if torch.backends.mps.is_available() else 'cpu')
         print(f'Using single device: {device}')
 
-    VAE_finetuning(dataset_path=dataset_path, Degradation_type=Degradation_type, image_size=image_size,
-                    magnification_factor=magnification_factor, Blur_radius=Blur_radius,VAE_weight_path=VAE_weight_path, num_crops=num_crops,
-                        batch_size=batch_size, multiple_gpus=multiple_gpus, device=device)
+    # VAE_finetuning(dataset_path=dataset_path, Degradation_type=Degradation_type, image_size=image_size,
+    #                 magnification_factor=magnification_factor, Blur_radius=Blur_radius,VAE_weight_path=VAE_weight_path, num_crops=num_crops,
+    #                     batch_size=batch_size, multiple_gpus=multiple_gpus, device=device)
     
-    # Diffusion_training(snapshot_folder_path=snapshot_folder_path, model_name=model_name, snapshot_name=snapshot_name,
-    #                     noise_steps=noise_steps, ema_smoothing=ema_smoothing, magnification_factor=magnification_factor,  
-    #                         UNet_type=UNet_type, input_channels=input_channels, output_channels=output_channels, 
-    #                             batch_size=batch_size, image_size=image_size, multiple_gpus=multiple_gpus, 
-    #                                 noise_schedule=noise_schedule, dataset_path=dataset_path, lr=lr,
-    #                                  epochs=epochs,check_preds_epoch=check_preds_epoch, patience=patience,
-    #                                   loss=loss, lr_scheduler=lr_scheduler, device=device)
+    Diffusion_training(snapshot_folder_path=snapshot_folder_path, model_name=model_name, snapshot_name=snapshot_name,
+                        noise_steps=noise_steps, ema_smoothing=ema_smoothing, magnification_factor=magnification_factor,  
+                            UNet_type=UNet_type, input_channels=input_channels, output_channels=output_channels, 
+                                batch_size=batch_size, image_size=image_size, multiple_gpus=multiple_gpus, 
+                                    noise_schedule=noise_schedule, dataset_path=dataset_path, lr=lr,
+                                     epochs=epochs,check_preds_epoch=check_preds_epoch, patience=patience,
+                                      loss=loss, lr_scheduler=lr_scheduler, device=device)
     
     # sampling_test(snapshot_folder_path=snapshot_folder_path, model_name=model_name,                     snapshot_name=snapshot_name, UNet_type=UNet_type,
     #                 input_channels=input_channels, output_channels=output_channels, image_size=image_size, 

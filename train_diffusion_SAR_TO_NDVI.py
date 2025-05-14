@@ -485,7 +485,6 @@ class Diffusion:
             if val_loader is not None:
                 pbar_val = tqdm(val_loader,desc='Validation', position=0)
 
-
             running_train_loss = 0.0
             running_val_loss = 0.0
             
@@ -682,8 +681,8 @@ def UNet_model_maker(UNet_type, SAR_channels, NDVI_channels, device):
         print('Using Residual Attention UNet')
         # model = Residual_Attention_UNet_SAR_TO_NDVI(SAR_channels, NDVI_channels, device).to(device)
         pass
-    elif UNet_type.lower() == 'residual multihead attention unet':
-        print('Using Residual MultiHead Attention UNet')
+    elif UNet_type.lower() == 'residual cross attention unet':
+        print('Using Residual Cross Attention Nnet')
         model = Residual_CrossAttention_UNet_SAR_TO_NDVI(SAR_channels, NDVI_channels, device).to(device)
         pass
     elif UNet_type.lower() == 'residual visual multihead attention unet':
@@ -857,7 +856,7 @@ def launch(args):
     model_name = args.model_name
     noise_steps = args.noise_steps
     patience = args.patience
-    SAR_channels, NDVI_channels = args.SAR_channels, args.NDVI_channels
+    # SAR_channels, NDVI_channels = args.SAR_channels, args.NDVI_channels
     generate_video = args.generate_video
     loss = args.loss
     UNet_type = args.UNet_type
@@ -887,13 +886,14 @@ def launch(args):
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         print('Using single GPU')
 
-    # VAE_finetuning(dataset_path=dataset_path, image_size=image_size,
-    #                 batch_size=batch_size, multiple_gpus=multiple_gpus, 
-    #                     VAE_weight_path=VAE_weight_path, device=device, freeze_vae_params=freeze_vae_params)
-
+    VAE_finetuning(dataset_path=dataset_path, image_size=image_size,
+                    batch_size=batch_size, multiple_gpus=multiple_gpus, 
+                        VAE_weight_path=VAE_weight_path, device=device, freeze_vae_params=freeze_vae_params)
+    # SAR images have 2 channels (VV and VH) and the NDVI image 1 channel. The VAE model we use need 3 channels in input. In order to make just few adjustments we use just the
+    # first SAR channels (i.e. VV), and  we add a Conv2d layer that will convert the 1 channel of SAR and NDVI to 3 channels. So, SAR_channels=NDVI_channels=1.
     # Diffusion_training(snapshot_folder_path=snapshot_folder_path, model_name=model_name, snapshot_name=snapshot_name,
     #                     noise_steps=noise_steps, ema_smoothing=ema_smoothing,
-    #                         UNet_type=UNet_type, SAR_channels=SAR_channels, NDVI_channels=NDVI_channels, 
+    #                         UNet_type=UNet_type, SAR_channels=1, NDVI_channels=1, 
     #                             batch_size=batch_size, image_size=image_size, multiple_gpus=multiple_gpus, 
     #                                 noise_schedule=noise_schedule, dataset_path=dataset_path, lr=lr,
     #                                  epochs=epochs,check_preds_epoch=check_preds_epoch, patience=patience,
@@ -922,8 +922,8 @@ if __name__ == '__main__':
     parser.add_argument('--noise_steps', type=int, default=200)
     parser.add_argument('--patience', type=int, default=10)
     parser.add_argument('--dataset_path', type=str, default=None)
-    parser.add_argument('--SAR_channels', type=int, default=2)
-    parser.add_argument('--NDVI_channels', type=int, default=1)
+    # parser.add_argument('--SAR_channels', type=int, default=2)
+    # parser.add_argument('--NDVI_channels', type=int, default=1)
     parser.add_argument('--generate_video', type=str2bool, nargs='?', const=True, default=False)
     parser.add_argument('--loss', type=str)
     parser.add_argument('--UNet_type', type=str, default='Residual Attention UNet') # for now we have only the Residual Attention UNet

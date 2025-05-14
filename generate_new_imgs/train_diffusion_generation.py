@@ -690,8 +690,8 @@ def VAE_finetuning(dataset_path, image_size, batch_size, multiple_gpus, VAE_weig
     #                 os.rename(os.path.join(encoded_images_train_save_path, "img", img_name), os.path.join(encoded_images_train_save_path, "img", str(i+50000)+".npy"))
 
 def UNet_model_maker(UNet_type, input_channels, output_channels, num_classes, device):
-    if UNet_type.lower() == 'residual attention unet':
-        print('Using Residual Attention UNet')
+    if UNet_type.lower() == 'residual cross attention unet':
+        print('Using Residual Cross Attention Unet')
         model = Residual_Attention_UNet_generation(input_channels, output_channels, num_classes, device).to(device)
     elif UNet_type.lower() == 'diffit unet':
         print('Using Residual DiffiT UNet')
@@ -889,12 +889,12 @@ if __name__ == '__main__':
     parser.add_argument('--VAE_weight_path', type=str, default=None)
     args = parser.parse_args()
     if args.model_name:
-        args.snapshot_folder_path = os.path.join('..', 'models_run', args.model_name, 'weights')
+        args.snapshot_folder_path = os.path.join('..', 'models_run', args.model_name)
     else:
         args.snapshot_folder_path = None
 
     if args.VAE_weight_path:
-        args.VAE_weight_path = os.path.join('..', 'models_run', args.VAE_weight_path, 'weights')
+        args.VAE_weight_path = os.path.join('..', 'models_run', args.VAE_weight_path)
     else:
         args.VAE_weight_path = None
 

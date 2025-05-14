@@ -8,15 +8,15 @@
 # model_name="Residual_MultiHeadCrossAttention_UNet_superres_magnification4_LRimgsize64_celeb50k_patches_downblur_StableDiffusion_LRandHR_gradientAccumulation_VAEapart"
 # model_name="Residual_MultiHeadCrossAttention_UNet_superres_magnification4_LRimgsize64_up42_sentinel2_patches_downblur_StableDiffusion_LRandHR_gradientAccumulation_VAEapart_17mln"
 # model_name="Residual_MultipleMultiHeadCrossAttention_UNet_superres_magnification4_LRimgsize64_celeb50k_patches_downblur_StableDiffusion_LRandHR_gradientAccumulation_VAEapart"
-model_name="Residual_MultipleMultiHeadCrossAttention_UNet_superres_magnification4_LRimgsize64_up42_sentinel2_patches_downblur_StableDiffusion_LRandHR_gradientAccumulation_VAEapart"
+# model_name="Residual_MultipleMultiHeadCrossAttention_UNet_superres_magnification4_LRimgsize64_up42_sentinel2_patches_downblur_StableDiffusion_LRandHR_gradientAccumulation_VAEapart"
 
-VAE_model_name="VAE_up42_LRandHR_finetuning_gradientAccumulation.pt"
+# VAE_model_name="VAE_up42_LRandHR_finetuning_gradientAccumulation.pt"
 # VAE_model_name="VAE_celeb100k_LRandHR_finetuning_gradientAccumulation.pt"
 
 ###### FINETUNING VAE ######
-dataset_path="up42_sentinel2_patches"
+# dataset_path="up42_sentinel2_patches"
 # dataset_path="celebA_10k"
-python train_diffusion_superres.py --dataset_path="$dataset_path" --Degradation_type="DownBlur" --image_size=256 --magnification_factor=4 --Blur_radius=0.5 --num_crops=1 --batch_size=4 --multiple_gpus=False --VAE_weight_path="$VAE_model_name" 
+# python train_diffusion_superres.py --dataset_path="$dataset_path" --Degradation_type="DownBlur" --image_size=256 --magnification_factor=4 --Blur_radius=0.5 --num_crops=1 --batch_size=4 --multiple_gpus=False --VAE_weight_path="$VAE_model_name" 
 
 ###### DIFFUSION TRAINING ######
 # dataset_path="celebA_50k_VAE_encoded"
@@ -45,10 +45,10 @@ python train_diffusion_superres.py --dataset_path="$dataset_path" --Degradation_
 
 ###### FINETUNING VAE ######
 # dataset_path="SAR_TO_NDVI_dataset"
-# python train_diffusion_SAR_TO_NDVI.py --epochs=15 --batch_size=2 --image_size=128 --lr=1e-4 --lr_scheduler="cosine" --check_preds_epoch=10 --noise_schedule="cosine" --snapshot_name=snapshot.pt --model_name="$model_name" --noise_steps=100 --patience=25 --dataset_path="$dataset_path" --SAR_channels=1 --NDVI_channels=1 --generate_video=False --loss="MSE" --UNet_type="residual multihead attention unet" --multiple_gpus=False --ema_smoothing=False --VAE_weight_path="$VAE_model_name" --freeze_vae_params=True
-# FINETUNING FOR 75 EPOCHS
+# python train_diffusion_SAR_TO_NDVI.py --epochs=15 --batch_size=2 --image_size=128 --lr=1e-4 --lr_scheduler="cosine" --check_preds_epoch=10 --noise_schedule="cosine" --snapshot_name=snapshot.pt --model_name="$model_name" --noise_steps=100 --patience=25 --dataset_path="$dataset_path" --generate_video=False --loss="MSE" --UNet_type="residual multihead attention unet" --multiple_gpus=False --ema_smoothing=False --VAE_weight_path="$VAE_model_name" --freeze_vae_params=True
+# FINETUNING FOR 50 EPOCHS
 
 
 ###### DIFFUSION TRAINING ######
 # dataset_path="SAR_TO_NDVI_dataset"
-# python train_diffusion_SAR_TO_NDVI.py --epochs=15 --batch_size=2 --image_size=128 --lr=1e-4 --lr_scheduler="cosine" --check_preds_epoch=10 --noise_schedule="cosine" --snapshot_name=snapshot.pt --model_name="$model_name" --noise_steps=10 --patience=25 --dataset_path="$dataset_path" --SAR_channels=1 --NDVI_channels=1 --generate_video=False --loss="MSE" --UNet_type="residual multihead attention unet" --multiple_gpus=False --ema_smoothing=False --VAE_weight_path="$VAE_model_name" --freeze_vae_params=False
+# python train_diffusion_SAR_TO_NDVI.py --epochs=15 --batch_size=2 --image_size=128 --lr=1e-4 --lr_scheduler="cosine" --check_preds_epoch=10 --noise_schedule="cosine" --snapshot_name=snapshot.pt --model_name="$model_name" --noise_steps=10 --patience=25 --dataset_path="$dataset_path" --generate_video=False --loss="MSE" --UNet_type="residual multihead attention unet" --multiple_gpus=False --ema_smoothing=False --VAE_weight_path="$VAE_model_name" --freeze_vae_params=False
