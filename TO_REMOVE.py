@@ -298,6 +298,7 @@ encoded_img = vae_model.encode(img).latent_dist.sample()
 decoded_img = vae_model.decode(encoded_img).sample
 
 
+
 fig, axs = plt.subplots(1,3, figsize=(10,5))
 axs = axs.ravel()
 axs[0].imshow(img[0].permute(1,2,0).cpu())
@@ -491,4 +492,75 @@ len(os.listdir(os.path.join("SAR_TO_NDVI_dataset","train","opt")))
 sar_img = torch.load(os.path.join("SAR_TO_NDVI_dataset","test","sar","Victoria_0_20180130_patch_69.pt"))
 sar_img = sar_img[0].unsqueeze(0).permute(1,2,0).cpu().numpy()
 plt.imshow(sar_img)
-# %%
+# %% SCALE the latents images for correctly train the diffusion model
+import os
+import matplotlib.pyplot as plt
+import torch
+from torchvision import transforms, models
+from torch.utils.data import DataLoader
+from utils import get_data_superres, get_data_superres_BSRGAN, video_maker, CosineAnnealingWarmupRestarts
+from UNet_model_superres_CrossAttention import Residual_CrossAttention_UNet_superres
+from diffusers import StableDiffusionPipeline
+from PIL import Image
+import numpy as np
+from tqdm import tqdm 
+
+model_path = "CompVis/stable-diffusion-v1-4"
+snapshot_path = os.path.join('models_run','VAE_up42_LRandHR_finetuning_gradientAccumulation.pt')
+device = 'cuda'
+pipe = StableDiffusionPipeline.from_pretrained(model_path)
+vae_model = pipe.vae
+vae_model = vae_model.eval()
+vae_model = vae_model.to(device)
+transform = transforms.Compose([
+    transforms.Resize((64, 64), interpolation=Image.BICUBIC),
+    transforms.Resize((256, 256), interpolation=Image.BICUBIC),
+    transforms.ToTensor()
+])
+
+def _load_snapshot_VAE(snapshot_path, model):
+    '''
+    This function loads the model state and the last epoch of training (so that we can restart the
+    training at this point instead of restarting from 0) from a snapshot.
+    It is a mandatory function in order to be fault tolerant. The reason is that if the training is interrupted, we can resume
+    it from the last snapshot.
+    '''
+    snapshot = torch.load(snapshot_path, map_location=device, weights_only=True)
+    model.load_state_dict(snapshot)
+
+    print(f"Snapshot loaded from {snapshot_path}")
+
+_load_snapshot_VAE(snapshot_path, vae_model)
+
+test_path = os.path.join("up42_sentinel2_patches","test_original")
+
+means = []
+means_adj = []
+vars = []
+vars_adj = []
+
+for img_name in tqdm(os.listdir(test_path)):
+    img = Image.open(os.path.join(test_path,img_name))
+    img = transform(img).unsqueeze(0).to(device)
+    encoded_img = vae_model.encode(img).latent_dist.sample()
+    encoded_img_adj = encoded_img.clone() * 0.18215
+    means.append(encoded_img[0].mean().item())
+    means_adj.append(encoded_img_adj[0].mean().item())
+    vars.append(encoded_img[0].var().item())
+    vars_adj.append(encoded_img_adj[0].var().item())
+    
+plt.hist(vars, bins=100, alpha=0.5, label='Original')
+plt.hist(vars_adj, bins=100, alpha=0.5, label='Adjusted')
+plt.xlabel('Variance')
+plt.ylabel('Frequency')
+plt.title('Histogram of Variance')
+plt.legend()
+plt.show()
+
+plt.hist(means, bins=100, alpha=0.5, label='Original')
+plt.hist(means_adj, bins=100, alpha=0.5, label='Adjusted')
+plt.xlabel('Mean')
+plt.ylabel('Frequency')
+plt.title('Histogram of Mean')
+plt.legend()
+plt.show()

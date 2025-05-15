@@ -193,16 +193,16 @@ class Diffusion:
         Output:
             x: a tensor of shape (n, input_channels, self.image_size, self.image_size) with the generated images
         '''
-
+        SCALE = 0.18215
         self.vae_model.eval()
 
         if len(lr_img.shape) < 4:
             lr_img = lr_img.unsqueeze(0)
 
-        lr_img = F.interpolate(lr_img.to('cpu'), scale_factor=self.magnification_factor, mode='bicubic').to(self.device)
+        lr_img = F.interpolate(lr_img.to('cpu'), scale_factor=self.magnification_factor, mode='bilinear').to(self.device)
         
         with torch.no_grad():
-            lr_img = self.vae_model.encode(lr_img).latent_dist.sample()
+            lr_img = self.vae_model.encode(lr_img).latent_dist.sample() * SCALE
 
         model.eval() # disables dropout and batch normalization
         with torch.no_grad(): # disables gradient calculation
@@ -239,8 +239,8 @@ class Diffusion:
             video_maker(frames, os.path.join(os.getcwd(), 'models_run', self.model_name, 'results', 'video_denoising.mp4'), 100)
             del frames
 
-        latent_sr_img = x
-        latent_lr_img = lr_img
+        latent_sr_img = x / SCALE
+        latent_lr_img = lr_img / SCALE
 
         # Delete unnecessary tensors to remove references
         del lr_img, x, frames, predicted_noise, noise  
@@ -434,6 +434,10 @@ class Diffusion:
 
     def encoded_dataset_VAE(self, dataloader, save_path):
             import numpy as np
+
+            SCALE = 0.18215 # The scaling factor is used to normalize the latent space variance to approximately 1. So that the Diffusion model (which expects 
+            # standard normal noise) can work properly.
+
             self.vae_model.eval()
             os.makedirs(os.path.join(save_path, "lr_img"), exist_ok=True)
             os.makedirs(os.path.join(save_path, "hr_img"), exist_ok=True)
@@ -443,15 +447,18 @@ class Diffusion:
                 hr_img = hr_img.to(self.device)
                 lr_img = F.interpolate(lr_img.to('cpu'), scale_factor=self.magnification_factor, mode='bicubic').to(self.device)
                 if self.multiple_gpus:
-                    lr_img = self.vae_model.module.encode(lr_img).latent_dist.sample()
-                    hr_img = self.vae_model.module.encode(hr_img).latent_dist.sample()
+                    lr_img = self.vae_model.module.encode(lr_img).latent_dist.sample() * SCALE
+                    hr_img = self.vae_model.module.encode(hr_img).latent_dist.sample() * SCALE
                 else:
-                    lr_img = self.vae_model.encode(lr_img).latent_dist.sample()
-                    hr_img = self.vae_model.encode(hr_img).latent_dist.sample()
+                    lr_img = self.vae_model.encode(lr_img).latent_dist.sample() * SCALE
+                    hr_img = self.vae_model.encode(hr_img).latent_dist.sample() * SCALE
                 for idx in range(lr_img.shape[0]):
                     unique_id = uuid.uuid4().hex
                     lr_img_to_save = lr_img[idx].permute(1,2,0).detach().cpu().numpy()
                     hr_img_to_save = hr_img[idx].permute(1,2,0).detach().cpu().numpy()
+                    if np.isnan(lr_img_to_save).any() or np.isnan(hr_img_to_save).any():
+                        print(f"NaN values found in the images at index {idx}. Skipping this image.")
+                        import ipdb; ipdb.set_trace()
                     np.save(os.path.join(save_path, "lr_img",  f'{unique_id}'), lr_img_to_save)
                     np.save(os.path.join(save_path, "hr_img",  f'{unique_id}'), hr_img_to_save)
             
@@ -984,7 +991,7 @@ def VAE_finetuning(dataset_path, Degradation_type, image_size, magnification_fac
         image_size=image_size, model_name=None, Degradation_type=Degradation_type,
         multiple_gpus=multiple_gpus, ema_smoothing=None)
         
-    diffusion.fine_tuning_VAE(train_loader, epochs=40, learning_rate=1e-4)
+    diffusion.fine_tuning_VAE(train_loader, epochs=50, learning_rate=1e-4)
 
     ########## ENCODE DATASET AND SAVE IT ##########
     encoded_images_train_save_path = os.path.join(dataset_path+'_VAE_encoded', "train_original")
