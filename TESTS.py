@@ -446,7 +446,7 @@ axs[4].imshow(latent_sr_img[0][:3,:,:].permute(1,2,0).detach().cpu())
 axs[4].set_title('Super Resolution Latent')
 plt.show()
 
-# %% SENTINE 2 BIG IMAGE PROCESSING
+# %% SENTINEL 2 BIG IMAGE PROCESSING
 import rasterio
 import numpy as np
 import matplotlib.pyplot as plt
@@ -564,3 +564,78 @@ plt.ylabel('Frequency')
 plt.title('Histogram of Mean')
 plt.legend()
 plt.show()
+
+#%% LR vs HR vs SR(latent) vs SR(bicubic)
+
+import os
+import matplotlib.pyplot as plt
+import torch
+from torchvision import transforms
+from torch.utils.data import DataLoader
+from utils import get_data_superres, CosineAnnealingWarmupRestarts
+from PIL import Image
+import numpy as np
+from train_diffusion_superres import *
+from UNet_model_superres_CrossAttention import Residual_CrossAttention_UNet_superres
+
+
+device = 'cuda'
+noise_schedule="cosine"
+UNet_type="residual cross attention unet"
+input_channels=output_channels=4
+image_size=256
+magnification_factor=4
+VAE_model_name="VAE_up42_LRandHR_finetuning_gradientAccumulation.pt"
+model_name="Residual_MultipleMultiHeadCrossAttention_UNet_superres_magnification4_LRimgsize64_up42_sentinel2_patches_downblur_StableDiffusion_LRandHR_gradientAccumulation_VAEapart"
+vae_model_path = "CompVis/stable-diffusion-v1-4"
+pipe = StableDiffusionPipeline.from_pretrained(vae_model_path)
+
+model = Residual_CrossAttention_UNet_superres(input_channels, output_channels, device).to(device)
+vae_model = pipe.vae.to(device)
+VAE_weight_path=os.path.join('models_run', VAE_model_name)
+noise_schedule="cosine"
+noise_steps=1000
+Blur_radius=0.5
+Degradation_type="DownBlur"
+snapshot_path=os.path.join('models_run', model_name, 'weights', 'snapshot.pt')
+
+diffusion = Diffusion(
+    noise_schedule=noise_schedule, model=model, vae_model=vae_model,
+    snapshot_path=snapshot_path,
+    VAE_weight_path=VAE_weight_path,
+    noise_steps=noise_steps, beta_start=1e-4, beta_end=0.02, 
+    magnification_factor=magnification_factor,device=device,
+    image_size=image_size, model_name=model_name, Degradation_type=Degradation_type,
+    multiple_gpus=False, ema_smoothing=False)
+
+transform_sr_bicubic = transforms.Compose([
+    transforms.Resize((64, 64), interpolation=Image.BICUBIC),
+    transforms.Resize((image_size, image_size), interpolation=Image.BICUBIC),
+    transforms.ToTensor()
+])
+transform_lr = transforms.Compose([
+    transforms.Resize((64, 64), interpolation=Image.BICUBIC),
+    transforms.ToTensor()
+])
+
+img_name = 'patch_768_7680.png'
+img = Image.open(os.path.join('up42_sentinel2_patches','test_original', img_name))
+sr_bicubic = transform_sr_bicubic(img).unsqueeze(0).to(device)
+lr_img = transform_lr(img).unsqueeze(0).to(device)
+latent_lr_img, latent_sr_img, superres_img = diffusion.sample(n=1,model=model, lr_img=lr_img, generate_video=False)
+sr_SwinIR = Image.open(os.path.join("..", "SWINIR", "results", "swinir_real_sr_x4", img_name.replace(".png", "_SwinIR.png"))).convert("RGB")
+
+fig, axs = plt.subplots(1,5, figsize=(10,5))
+axs = axs.ravel()
+axs[0].imshow(lr_img[0].permute(1,2,0).cpu())
+axs[0].set_title('LR_img')
+axs[1].imshow(img)
+axs[1].set_title('HR_img')
+axs[2].imshow(superres_img[0].permute(1,2,0).detach().cpu())
+axs[2].set_title('SR(latent_diffusion)')
+axs[3].imshow(sr_bicubic[0].permute(1,2,0).detach().cpu())
+axs[3].set_title('SR(bicubic)')
+axs[4].imshow(sr_SwinIR)
+axs[4].set_title('SR(SwinIR)')
+plt.show()
+# %%

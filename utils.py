@@ -9,7 +9,7 @@ from tqdm import tqdm
 from PIL import Image,ImageDraw,ImageFont,ImageFilter
 from scipy.linalg import orth
 from degradation_from_BSRGAN import degradation_bsrgan_plus, single2uint, imread_uint, soft_degradation_bsrgan
-import imageio
+# import imageio
 import cv2
 from torch.optim.lr_scheduler import _LRScheduler
 import torch.nn.functional as F
@@ -378,45 +378,45 @@ def convert_png_to_jpg(png_file, jpg_file):
     except Exception as e:
         print("Conversion failed:", e)
 
-def gif_maker(frames, frame_stride=1, destination_path='output.gif'):
-    '''
-    This function saves the frames that are passed in input as a gif.
+# def gif_maker(frames, frame_stride=1, destination_path='output.gif'):
+#     '''
+#     This function saves the frames that are passed in input as a gif.
 
-    *Input:
-        - frames: list of frames to be saved in a gif
-        - frame_stride: int. The jump between frames that will be saved in the gif (e.g. if frame_stride=5 i=0 frame is considered, then i=5 frame is considered, etc.)
-    *Output:
-        - None
-    '''
-    images = []
-    if frames[0].max()<100:
-        frames = [torch.clamp(frame[0],0,1)*255 for frame in frames]
+#     *Input:
+#         - frames: list of frames to be saved in a gif
+#         - frame_stride: int. The jump between frames that will be saved in the gif (e.g. if frame_stride=5 i=0 frame is considered, then i=5 frame is considered, etc.)
+#     *Output:
+#         - None
+#     '''
+#     images = []
+#     if frames[0].max()<100:
+#         frames = [torch.clamp(frame[0],0,1)*255 for frame in frames]
     
-    for i,frame in enumerate(tqdm(frames)):
-        if (i % frame_stride == 0) or (i == len(frames)-1):
-            frame = frame.type(torch.uint8)
-            np_frame = frame.permute(1, 2, 0).detach().cpu().numpy()
-            image = Image.fromarray(np_frame)
+#     for i,frame in enumerate(tqdm(frames)):
+#         if (i % frame_stride == 0) or (i == len(frames)-1):
+#             frame = frame.type(torch.uint8)
+#             np_frame = frame.permute(1, 2, 0).detach().cpu().numpy()
+#             image = Image.fromarray(np_frame)
 
-            draw = ImageDraw.Draw(image)
+#             draw = ImageDraw.Draw(image)
 
-            font = ImageFont.load_default()
-            text = f'frame {i}'
+#             font = ImageFont.load_default()
+#             text = f'frame {i}'
 
-            text_position = (10, 10)
-            text_color = (255, 255, 255)  # white text
+#             text_position = (10, 10)
+#             text_color = (255, 255, 255)  # white text
             
-            outline_color = (0, 0, 0)  # black outline
-            draw.text((text_position[0]-1, text_position[1]-1), text, font=font, fill=outline_color)
-            draw.text((text_position[0]+1, text_position[1]-1), text, font=font, fill=outline_color)
-            draw.text((text_position[0]-1, text_position[1]+1), text, font=font, fill=outline_color)
-            draw.text((text_position[0]+1, text_position[1]+1), text, font=font, fill=outline_color)
+#             outline_color = (0, 0, 0)  # black outline
+#             draw.text((text_position[0]-1, text_position[1]-1), text, font=font, fill=outline_color)
+#             draw.text((text_position[0]+1, text_position[1]-1), text, font=font, fill=outline_color)
+#             draw.text((text_position[0]-1, text_position[1]+1), text, font=font, fill=outline_color)
+#             draw.text((text_position[0]+1, text_position[1]+1), text, font=font, fill=outline_color)
 
-            draw.text(text_position, text, font=font, fill=text_color)
+#             draw.text(text_position, text, font=font, fill=text_color)
 
-            images.append(image)
+#             images.append(image)
 
-    imageio.mimsave(destination_path, images, duration=0.0005)
+#     imageio.mimsave(destination_path, images, duration=0.0005)
 
 def video_maker(frames, video_path='output.mp4', fps=50):
     '''

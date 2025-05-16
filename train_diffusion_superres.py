@@ -8,15 +8,15 @@ from torch.utils.data import DataLoader
 from utils import get_data_superres, get_data_superres_BSRGAN, get_data_superres_PLAIN, video_maker, CosineAnnealingWarmupRestarts
 import copy
 
-# from UNet_model_superres import Residual_Attention_UNet_superres, EMA
-# from UNet_model_superres_VMHA import Residual_Attention_UNet_superres, Residual_VisionMultiheadAttention_UNet_superres, Residual_DiffiT_UNet_superres, EMA
 from UNet_model_superres_CrossAttention import Residual_CrossAttention_UNet_superres, EMA
-# from ViT_model import ViTModel
 
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.distributed import init_process_group, destroy_process_group
 from torch.utils.data.distributed import DistributedSampler
 import torch.nn.functional as F
+
+from torchvision.transforms.functional import resize
+import clip
 
 from lpips import LPIPS  # Perceptual loss library
 
@@ -161,6 +161,23 @@ class Diffusion:
         epsilon = torch.randn_like(x, dtype=torch.float32) # torch.randn_like() returns a tensor of the same shape of x with random values from a standard gaussian
         # (notice that the values inside x are not relevant)
         return sqrt_alpha_hat * x + sqrt_one_minus_alpha_hat * epsilon, epsilon
+
+    def xt_to_x0(self, x_t, t, noise_pred):
+        '''
+        This function is used to compute the x_0 from the x_t and the predicted noise. 
+        It is used in the training phase to compute the CLIP loss.
+
+        Input:
+            x_t: the image at time t
+            t: the current timestep
+            noise_pred: the predicted noise
+
+        Output:
+            x_0: the image at time t=0
+        '''
+        sqrt_alpha_hat = torch.sqrt(self.alpha_hat[t])[:, None, None, None]
+        sqrt_one_minus_alpha_hat = torch.sqrt(1 - self.alpha_hat[t])[:, None, None, None]
+        return (x_t - sqrt_one_minus_alpha_hat * noise_pred) / sqrt_alpha_hat
 
     def sample_timesteps(self, n):
         '''
@@ -458,7 +475,6 @@ class Diffusion:
                     hr_img_to_save = hr_img[idx].permute(1,2,0).detach().cpu().numpy()
                     if np.isnan(lr_img_to_save).any() or np.isnan(hr_img_to_save).any():
                         print(f"NaN values found in the images at index {idx}. Skipping this image.")
-                        import ipdb; ipdb.set_trace()
                     np.save(os.path.join(save_path, "lr_img",  f'{unique_id}'), lr_img_to_save)
                     np.save(os.path.join(save_path, "hr_img",  f'{unique_id}'), hr_img_to_save)
             
@@ -491,12 +507,16 @@ class Diffusion:
 
         if loss == 'MSE':
             loss_function = nn.MSELoss()
+        elif loss == "CLIP":
+            mse_loss = nn.MSELoss()
+            loss_function = CLIPLoss(self.vae_model, mse_loss, device=self.device, lambda_clip=0.5)
         elif loss == 'MAE':
             loss_function = nn.L1Loss()
         elif loss == 'Huber':
             loss_function = nn.HuberLoss() 
         else:
             raise ValueError('The Loss must be either MSE or MAE or Huber')
+        print(f"Using {loss} function loss")
 
         if lr_scheduler and lr_scheduler.lower() == 'cosine':
             scheduler = CosineAnnealingWarmupRestarts(
@@ -537,8 +557,13 @@ class Diffusion:
 
                 optimizer.zero_grad() # set the gradients to 0
                 predicted_noise = model(x_t, t, lr_img, self.magnification_factor) 
+                
+                if loss == "CLIP":
+                    x0_pred = self.xt_to_x0(x_t, t, predicted_noise)
+                    train_loss, mse_loss, clip_loss = loss_function(predicted_noise, noise, hr_img, x0_pred)
+                else:
+                    train_loss = loss_function(predicted_noise, noise)
 
-                train_loss = loss_function(predicted_noise, noise)
                 train_loss.backward() # compute the gradients
                 optimizer.step() # update the weights
 
@@ -588,7 +613,11 @@ class Diffusion:
                         else:
                             predicted_noise = model(x_t, t, lr_img, self.magnification_factor) 
                         
-                        val_loss = loss_function(predicted_noise, noise)
+                        if loss == "CLIP":
+                            x0_pred = self.xt_to_x0(x_t, t, predicted_noise)
+                            val_loss, mse_loss, clip_loss = loss_function(predicted_noise, noise, hr_img, x0_pred)
+                        else:
+                            val_loss = loss_function(predicted_noise, noise)
 
                         pbar_val.set_postfix(LOSS=val_loss.item()) # set_postfix just adds a message or value
                         # displayed after the progress bar. In this case the loss of the current batch.
@@ -857,6 +886,45 @@ class vae_loss(nn.Module):
         latent_loss = F.mse_loss(latents_lr, latents_hr)
         return latent_loss 
 
+class CLIPLoss(nn.Module):
+    def __init__(self, vae_model, mse_loss, device='cuda', lambda_clip=0.5):
+        super(CLIPLoss, self).__init__()
+
+        self.vae_model = vae_model
+        self.device = device
+        clip_model, clip_preprocess = clip.load("ViT-B/32", device=device)
+        clip_model.eval()
+        self.clip_model = clip_model
+        self.mse_loss = mse_loss
+        self.lambda_clip = lambda_clip
+
+    def clip_preprocess_tensor(self, image_tensor):
+            # image_tensor: (B, 3, H, W) in [0, 1] range
+            image_tensor = resize(image_tensor, [224, 224])
+            image_tensor = (image_tensor - 0.48145466) / 0.26862954  # Normalize to CLIP range
+            image_tensor = image_tensor.to(torch.float32)
+            return image_tensor
+    
+    def forward(self, predicted_noise, noise, gt_latent, x0_pred):
+        with torch.no_grad():
+            decoded_pred = self.vae_model.decode(x0_pred).sample  
+            decoded_gt = self.vae_model.decode(gt_latent).sample
+            # decoded_pred = decoded_pred.clamp(0,1)
+            # decoded_gt = decoded_gt.clamp(0,1)
+        decoded_pred = self.clip_preprocess_tensor(decoded_pred)
+        decoded_gt = self.clip_preprocess_tensor(decoded_gt)
+        with torch.no_grad():
+            embed_pred = self.clip_model.encode_image(decoded_pred)
+            embed_gt = self.clip_model.encode_image(decoded_gt)
+
+        clip_loss = 1 - F.cosine_similarity(embed_pred, embed_gt).mean()
+
+        mse = self.mse_loss(predicted_noise, noise)
+        total_loss = mse + self.lambda_clip * clip_loss
+
+        return total_loss, mse.item(), clip_loss.item()
+
+
 def dataloader_PRE_encoding_maker(dataset_path, Degradation_type, image_size, magnification_factor, Blur_radius, num_crops=1, batch_size=16, multiple_gpus=False):
     if Degradation_type.lower() == 'downblur':
         if image_size % magnification_factor != 0:
@@ -940,31 +1008,6 @@ def UNet_model_maker(UNet_type, input_channels, output_channels, device, image_s
     
     return model
 
-def super_resolution_sampling(diffusion_class, UNet_model, lr_img, generate_video=False, hr_img=None, save_path=None):
-    if hr_img:
-        fig, axs = plt.subplots(2,3, figsize=(15,15))
-    else:
-        fig, axs = plt.subplots(1,4, figsize=(15,15))
-    axs = axs.ravel()
-
-    latent_lr_img, latent_sr_img, superres_img = diffusion_class.sample(n=1,model=UNet_model, lr_img=lr_img, input_channels=lr_img.shape[0], generate_video=generate_video)
-
-    axs[0].imshow(lr_img.permute(1,2,0).detach().cpu().numpy())
-    axs[0].set_title('Low resolution image')
-    axs[1].imshow(latent_lr_img[0][:3,:,:].permute(1,2,0).detach().cpu().numpy())
-    axs[1].set_title('Low resolution latent')
-    axs[2].imshow(superres_img[0].permute(1,2,0).detach().cpu().numpy())
-    axs[2].set_title('Super resolution image')
-    axs[3].imshow(latent_sr_img[0][:3,:,:].permute(1,2,0).detach().cpu().numpy())
-    axs[3].set_title('Super resolution latent')
-    if hr_img:
-        axs[4].imshow(hr_img.permute(1,2,0).detach().cpu().numpy())
-        axs[4].set_title('High resolution image')
-    if save_path:
-        plt.savefig(save_path)
-    plt.show()
-    return superres_img
-
 def VAE_model_maker(device):
     vae_model_path = "CompVis/stable-diffusion-v1-4"
     pipe = StableDiffusionPipeline.from_pretrained(vae_model_path)
@@ -1017,7 +1060,7 @@ def Diffusion_training(snapshot_folder_path, model_name, snapshot_name,
                                 batch_size, image_size, multiple_gpus, 
                                     noise_schedule, dataset_path, lr,
                                      epochs,check_preds_epoch, patience,
-                                      loss, lr_scheduler, device):
+                                      loss, lr_scheduler, device, VAE_weight_path):
 
     os.makedirs(snapshot_folder_path, exist_ok=True)
     os.makedirs(os.path.join(os.curdir, 'models_run', model_name, 'results'), exist_ok=True)
@@ -1030,10 +1073,19 @@ def Diffusion_training(snapshot_folder_path, model_name, snapshot_name,
 
     snapshot_path = os.path.join(snapshot_folder_path, snapshot_name)
 
+    # diffusion = Diffusion(
+    #     noise_schedule=noise_schedule, model=model, vae_model=None,
+    #     snapshot_path=snapshot_path,
+    #     VAE_weight_path=None,
+    #     noise_steps=noise_steps, beta_start=1e-4, beta_end=0.02, 
+    #     magnification_factor=magnification_factor,device=device,
+    #     image_size=image_size, model_name=model_name, Degradation_type=None,
+    #     multiple_gpus=multiple_gpus, ema_smoothing=ema_smoothing)
+    vae_model = VAE_model_maker(device)
     diffusion = Diffusion(
-        noise_schedule=noise_schedule, model=model, vae_model=None,
+        noise_schedule=noise_schedule, model=model, vae_model=vae_model,
         snapshot_path=snapshot_path,
-        VAE_weight_path=None,
+        VAE_weight_path=VAE_weight_path,
         noise_steps=noise_steps, beta_start=1e-4, beta_end=0.02, 
         magnification_factor=magnification_factor,device=device,
         image_size=image_size, model_name=model_name, Degradation_type=None,
@@ -1199,7 +1251,7 @@ def launch(args):
     #                             batch_size=batch_size, image_size=image_size, multiple_gpus=multiple_gpus, 
     #                                 noise_schedule=noise_schedule, dataset_path=dataset_path, lr=lr,
     #                                  epochs=epochs,check_preds_epoch=check_preds_epoch, patience=patience,
-    #                                   loss=loss, lr_scheduler=lr_scheduler, device=device)
+    #                                   loss=loss, lr_scheduler=lr_scheduler, device=device, VAE_weight_path=VAE_weight_path)
     
     sampling_test(snapshot_folder_path=snapshot_folder_path, model_name=model_name, snapshot_name=snapshot_name, UNet_type=UNet_type,
                     input_channels=input_channels, output_channels=output_channels, image_size=image_size, 
