@@ -88,7 +88,7 @@ axs[2].imshow(sr_img[0].permute(1, 2, 0).cpu().detach().numpy())
 axs[2].set_title('Reconstructed Image')
 plt.show()
 
-# %% EXMPLE VAE ON up42
+# %% EXAMPLE VAE ON up42
 img_path = os.path.join('up42_sentinel2_patches','test_original','patch_0_4864.png')
 img = Image.open(img_path).resize((image_size, image_size))
 lr_img = img.resize((image_size//magnification_factor, image_size//magnification_factor))
@@ -183,8 +183,144 @@ print(psnr(img[0].permute(1,2,0).cpu().numpy(), decoded_img[0].permute(1,2,0).de
 # # %%
 # encoded_img4 = vae_model.encoder(img)
 # decoded_img4 = vae_model(img).sample
+#%% VAE SAR to NDVI
+import os
+import matplotlib.pyplot as plt
+import torch
+from torchvision import transforms
+from torch.utils.data import DataLoader
+from utils import get_data_SAR_TO_NDVI, CosineAnnealingWarmupRestarts
+from UNet_model_superres_CrossAttention import Residual_CrossAttention_UNet_superres
+from diffusers import StableDiffusionPipeline
+from PIL import Image
+import numpy as np
+from torch import nn
 
+def VAE_model_maker(device, freeze_vae_params):
+    vae_model_path = "CompVis/stable-diffusion-v1-4"
+    pipe = StableDiffusionPipeline.from_pretrained(vae_model_path)
+    vae_model = pipe.vae.to(device)
+    vae_model = VAE_model_wrapped(vae_model, in_channels=1, freeze_vae_params=freeze_vae_params).to(device)
+    return vae_model
+class VAE_model_wrapped(nn.Module):
+    def __init__(self, vae_model, in_channels, freeze_vae_params=False):
+        super(VAE_model_wrapped, self).__init__()
+        self.vae_model = vae_model
+        self.in_channels = in_channels
+        self.conv = nn.Conv2d(in_channels, 3, kernel_size=3, stride=1, padding=1)
+        if freeze_vae_params: #if True, the vae parameters are frozen and just the conv layer is trained
+            for param in self.vae_model.parameters():
+                param.requires_grad = False
+    def encode(self, x):
+        x = self.conv(x)
+        latents = self.vae_model.encode(x)
+        return latents
 
+    def decode(self, latents):
+        return self.vae_model.decode(latents)
+
+def _load_snapshot_VAE(snapshot_path, model):
+    '''
+    This function loads the model state and the last epoch of training (so that we can restart the
+    training at this point instead of restarting from 0) from a snapshot.
+    It is a mandatory function in order to be fault tolerant. The reason is that if the training is interrupted, we can resume
+    it from the last snapshot.
+    '''
+    snapshot = torch.load(snapshot_path, map_location=device, weights_only=True)
+    model.load_state_dict(snapshot)
+
+    print(f"Snapshot loaded from {snapshot_path}")
+
+device='cuda'
+snapshot_path = os.path.join('models_run','VAE_SAR_TO_NDVI_finetuning_gradientAccumulation.pt')
+vae_model = VAE_model_maker(device=device, freeze_vae_params=False)
+vae_model.eval()
+vae_model = vae_model.to(device)
+_load_snapshot_VAE(snapshot_path, vae_model)
+
+data_path = os.path.join("SAR_TO_NDVI_dataset", "test")
+test_data = get_data_SAR_TO_NDVI(data_path)
+
+sar_img, ndvi_img = test_data[0]
+sar_img = sar_img.unsqueeze(0).to(device)
+ndvi_img = ndvi_img.unsqueeze(0).to(device)
+
+encoded_sar_img = vae_model.encode(sar_img).latent_dist.sample()
+decoded_sar_img = vae_model.decode(encoded_sar_img).sample
+
+encoded_ndvi_img = vae_model.encode(ndvi_img).latent_dist.sample()
+decoded_ndvi_img = vae_model.decode(encoded_ndvi_img).sample
+
+fig, axs = plt.subplots(2,3, figsize=(10,5))
+axs = axs.ravel()
+
+axs[0].imshow(encoded_sar_img[0,:3,:,:].permute(1,2,0).detach().cpu())
+axs[0].set_title("encoded_sar_img")
+axs[1].imshow(decoded_sar_img[0,:,:,:].permute(1,2,0).detach().cpu())
+axs[1].set_title("decoded_sar_img")
+axs[2].imshow(sar_img[0,:,:,:].permute(1,2,0).detach().cpu())
+axs[2].set_title("sar_img")
+axs[3].imshow(encoded_ndvi_img[0,:3,:,:].permute(1,2,0).detach().cpu())
+axs[3].set_title("encoded_ndvi_img")
+axs[4].imshow(decoded_ndvi_img[0,:,:,:].permute(1,2,0).detach().cpu())
+axs[4].set_title("decoded_ndvi_img")
+axs[5].imshow(ndvi_img[0,:,:,:].permute(1,2,0).detach().cpu())
+axs[5].set_title("ndvi_img")
+
+#%% VAE 102flowers generation
+from generate_new_imgs.utils import dataset_maker
+from generate_new_imgs.UNet_model_generation_CrossAttention import Residual_Attention_UNet_generation
+import os
+import matplotlib.pyplot as plt
+import torch
+from torchvision import transforms
+from torch.utils.data import DataLoader
+from diffusers import StableDiffusionPipeline
+from PIL import Image
+import numpy as np
+from torch import nn
+
+def VAE_model_maker(device):
+    vae_model_path = "CompVis/stable-diffusion-v1-4"
+    pipe = StableDiffusionPipeline.from_pretrained(vae_model_path)
+    vae_model = pipe.vae.to(device)
+    return vae_model
+
+def _load_snapshot_VAE(snapshot_path, model):
+    '''
+    This function loads the model state and the last epoch of training (so that we can restart the
+    training at this point instead of restarting from 0) from a snapshot.
+    It is a mandatory function in order to be fault tolerant. The reason is that if the training is interrupted, we can resume
+    it from the last snapshot.
+    '''
+    snapshot = torch.load(snapshot_path, map_location=device, weights_only=True)
+    model.load_state_dict(snapshot)
+
+    print(f"Snapshot loaded from {snapshot_path}")
+
+device='cuda'
+snapshot_path = os.path.join('models_run','VAE_102flowers_finetuning_gradientAccumulation.pt')
+vae_model = VAE_model_maker(device=device)
+vae_model.eval()
+vae_model = vae_model.to(device)
+_load_snapshot_VAE(snapshot_path, vae_model)
+
+image_size = 512
+dataset_path = os.path.join("102flowers_dataset")
+
+dataset = dataset_maker(image_size, dataset_path)
+
+flower_0_img = dataset[100][0].unsqueeze(0).to(device)
+encoded_img = vae_model.encode(flower_0_img).latent_dist.sample()
+decoded_img = vae_model.decode(encoded_img).sample
+
+fig, axs = plt.subplots(1,3)
+axs = axs.ravel()
+
+axs[0].imshow(flower_0_img[0].permute(1,2,0).detach().cpu())
+axs[1].imshow(encoded_img[0,:3,:,:].permute(1,2,0).detach().cpu())
+axs[2].imshow(decoded_img[0].permute(1,2,0).detach().cpu())
+plt.show()
 # %% LEARNING RATE SCHEDULE EXAMPLE
 from UNet_model_superres_CrossAttention import Residual_CrossAttention_UNet_superres
 import torch
@@ -565,8 +701,7 @@ plt.title('Histogram of Mean')
 plt.legend()
 plt.show()
 
-#%% LR vs HR vs SR(latent) vs SR(bicubic)
-
+#%% LR vs HR vs SR(latent_MAE) vs SR(latent_CLIP) vs SR(bicubic)
 import os
 import matplotlib.pyplot as plt
 import torch
@@ -586,7 +721,8 @@ input_channels=output_channels=4
 image_size=256
 magnification_factor=4
 VAE_model_name="VAE_up42_LRandHR_finetuning_gradientAccumulation.pt"
-model_name="Residual_MultipleMultiHeadCrossAttention_UNet_superres_magnification4_LRimgsize64_up42_sentinel2_patches_downblur_StableDiffusion_LRandHR_gradientAccumulation_VAEapart"
+model_name_MAE="Residual_MultipleMultiHeadCrossAttention_UNet_superres_magnification4_LRimgsize64_up42_sentinel2_patches_downblur_StableDiffusion_LRandHR_gradientAccumulation_VAEapart"
+model_name_CLIP="Residual_MultipleMultiHeadCrossAttention_UNet_superres_magnification4_LRimgsize64_up42_sentinel2_patches_downblur_StableDiffusion_LRandHR_gradientAccumulation_VAEapart_MSE_CLIPLoss"
 vae_model_path = "CompVis/stable-diffusion-v1-4"
 pipe = StableDiffusionPipeline.from_pretrained(vae_model_path)
 
@@ -597,15 +733,25 @@ noise_schedule="cosine"
 noise_steps=1000
 Blur_radius=0.5
 Degradation_type="DownBlur"
-snapshot_path=os.path.join('models_run', model_name, 'weights', 'snapshot.pt')
+snapshot_path_MAE=os.path.join('models_run', model_name_MAE, 'weights', 'snapshot.pt')
+snapshot_path_CLIP=os.path.join('models_run', model_name_CLIP, 'weights', 'snapshot.pt')
 
-diffusion = Diffusion(
+diffusion_MAE = Diffusion(
     noise_schedule=noise_schedule, model=model, vae_model=vae_model,
-    snapshot_path=snapshot_path,
+    snapshot_path=snapshot_path_MAE,
     VAE_weight_path=VAE_weight_path,
     noise_steps=noise_steps, beta_start=1e-4, beta_end=0.02, 
     magnification_factor=magnification_factor,device=device,
-    image_size=image_size, model_name=model_name, Degradation_type=Degradation_type,
+    image_size=image_size, model_name=model_name_MAE, Degradation_type=Degradation_type,
+    multiple_gpus=False, ema_smoothing=False)
+
+diffusion_CLIP = Diffusion(
+    noise_schedule=noise_schedule, model=model, vae_model=vae_model,
+    snapshot_path=snapshot_path_CLIP,
+    VAE_weight_path=VAE_weight_path,
+    noise_steps=noise_steps, beta_start=1e-4, beta_end=0.02, 
+    magnification_factor=magnification_factor,device=device,
+    image_size=image_size, model_name=model_name_CLIP, Degradation_type=Degradation_type,
     multiple_gpus=False, ema_smoothing=False)
 
 transform_sr_bicubic = transforms.Compose([
@@ -622,20 +768,23 @@ img_name = 'patch_768_7680.png'
 img = Image.open(os.path.join('up42_sentinel2_patches','test_original', img_name))
 sr_bicubic = transform_sr_bicubic(img).unsqueeze(0).to(device)
 lr_img = transform_lr(img).unsqueeze(0).to(device)
-latent_lr_img, latent_sr_img, superres_img = diffusion.sample(n=1,model=model, lr_img=lr_img, generate_video=False)
+latent_lr_img, latent_sr_img, superres_img_MAE = diffusion_MAE.sample(n=1,model=model, lr_img=lr_img, generate_video=False)
+latent_lr_img, latent_sr_img, superres_img_CLIP = diffusion_CLIP.sample(n=1,model=model, lr_img=lr_img, generate_video=False)
 sr_SwinIR = Image.open(os.path.join("..", "SWINIR", "results", "swinir_real_sr_x4", img_name.replace(".png", "_SwinIR.png"))).convert("RGB")
 
-fig, axs = plt.subplots(1,5, figsize=(10,5))
+fig, axs = plt.subplots(2,3, figsize=(10,10))
 axs = axs.ravel()
 axs[0].imshow(lr_img[0].permute(1,2,0).cpu())
 axs[0].set_title('LR_img')
 axs[1].imshow(img)
 axs[1].set_title('HR_img')
-axs[2].imshow(superres_img[0].permute(1,2,0).detach().cpu())
-axs[2].set_title('SR(latent_diffusion)')
-axs[3].imshow(sr_bicubic[0].permute(1,2,0).detach().cpu())
-axs[3].set_title('SR(bicubic)')
-axs[4].imshow(sr_SwinIR)
-axs[4].set_title('SR(SwinIR)')
+axs[2].imshow(superres_img_MAE[0].permute(1,2,0).detach().cpu())
+axs[2].set_title('SR(latent_MAE)')
+axs[3].imshow(superres_img_CLIP[0].permute(1,2,0).detach().cpu())
+axs[3].set_title('SR(latent_CLIP)')
+axs[4].imshow(sr_bicubic[0].permute(1,2,0).detach().cpu())
+axs[4].set_title('SR(bicubic)')
+axs[5].imshow(sr_SwinIR)
+axs[5].set_title('SR(SwinIR)')
 plt.show()
 # %%

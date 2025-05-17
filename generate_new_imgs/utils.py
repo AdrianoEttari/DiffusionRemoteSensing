@@ -7,7 +7,7 @@ import math
 from torchvision import datasets
 import os
 from torchvision import transforms
-
+from torch.utils.data import Dataset
 
 def video_maker(frames, video_path='output.mp4', fps=50):
     '''
@@ -188,10 +188,53 @@ def dataset_maker(image_size, dataset_path):
     transforms.ToTensor(),
         ]) 
     data_path = f'../{dataset_path}'
+    if os.path.exists(data_path):
+        print(f"dataset found at ../{dataset_path}")
+    else:
+        data_path = f'{dataset_path}'
 
     # dataset = datasets.ImageFolder(data_path, transform=transform)
     dataset = CustomImageFolder(data_path, transform=transform)
     return dataset
+
+
+class NPYFolderDataset(Dataset):
+    def __init__(self, root_dir):
+        self.samples = []
+        self.class_to_idx = {}
+        self.classes = []
+
+        data_path = f'../{root_dir}'
+        if os.path.exists(data_path):
+            print(f"dataset found at ../{data_path}")
+        else:
+            data_path = f'{root_dir}'
+        # Identify class folders
+        for class_name in sorted(os.listdir(data_path), key=lambda x: int(x) if x.isdigit() else x):
+            class_path = os.path.join(data_path, class_name)
+            if os.path.isdir(class_path):
+                if class_name not in self.class_to_idx:
+                    self.class_to_idx[class_name] = len(self.classes)
+                    self.classes.append(class_name)
+
+                for fname in os.listdir(class_path):
+                    if fname.endswith(".npy"):
+                        self.samples.append((os.path.join(class_path, fname), self.class_to_idx[class_name]))
+
+    def __len__(self):
+        return len(self.samples)
+
+    def __getitem__(self, idx):
+        path, label = self.samples[idx]
+        arr = np.load(path)
+
+        
+        transform = transforms.Compose([
+        transforms.ToTensor(),
+            ]) 
+        tensor = transform(arr)
+
+        return tensor, label
 
 
 if __name__=="__main__":

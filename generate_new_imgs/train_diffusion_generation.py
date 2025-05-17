@@ -6,7 +6,7 @@ import torchvision.transforms as transforms
 from tqdm import tqdm
 from torch.utils.data import DataLoader
 import copy
-from utils import video_maker, CosineAnnealingWarmupRestarts, dataset_maker
+from utils import video_maker, CosineAnnealingWarmupRestarts, dataset_maker, NPYFolderDataset
 import numpy as np
 import torchvision.datasets as datasets
 
@@ -14,6 +14,8 @@ from UNet_model_generation_CrossAttention import Residual_Attention_UNet_generat
 # from UNet_model_generation_VMHA import Residual_Attention_UNet_generation, Residual_DiffiT_UNet_generation, EMA
 
 import torch.nn.functional as F
+from torchvision.transforms.functional import resize
+import clip
 
 from lpips import LPIPS  
 
@@ -156,7 +158,7 @@ class Diffusion:
         epsilon = torch.randn_like(x, dtype=torch.float32) # torch.randn_like() returns a tensor of the same shape of x with random values from a standard gaussian
         # (notice that the values inside x are not relevant)
         return sqrt_alpha_hat * x + sqrt_one_minus_alpha_hat * epsilon, epsilon
-
+    
     def sample_timesteps(self, n):
         '''
         During the training we sample t from a Uniform discrete distribution (from 1 to T)
@@ -195,7 +197,7 @@ class Diffusion:
         Output:
             x: a tensor of shape (n, input_channels, self.image_size, self.image_size) with the generated images
         '''
-
+        SCALE = 0.18215
         model.eval() # disables dropout and batch normalization
         with torch.no_grad(): # disables gradient calculation
             x = torch.randn((n, 4, self.image_size//8, self.image_size//8), device=self.device)
@@ -229,7 +231,7 @@ class Diffusion:
             video_maker(frames, os.path.join(os.getcwd(), 'models_run', self.model_name, 'results', 'video_denoising.mp4'), 100)
             del frames
 
-        latent_img = x
+        latent_img = x / SCALE
 
         # Delete unnecessary tensors to remove references
         del x, predicted_noise, noise  
@@ -414,19 +416,23 @@ class Diffusion:
 
     def encoded_dataset_VAE(self, dataloader, save_path):
             import numpy as np
+
+            SCALE = 0.18215 # The scaling factor is used to normalize the latent space variance to approximately 1. So that the Diffusion model (which expects 
+            # standard normal noise) can work properly.
+
             self.vae_model.eval()
-            os.makedirs(os.path.join(save_path, "img"), exist_ok=True)
             pbar_dataloader = tqdm(dataloader, desc='Encoding dataset', position=0)
             for i, (img,label) in enumerate(pbar_dataloader):
+                os.makedirs(os.path.join(save_path, str(int(label))), exist_ok=True)
                 img = img.to(self.device)
                 if self.multiple_gpus:
-                    img = self.vae_model.module.encode(img).latent_dist.sample()
+                    img = self.vae_model.module.encode(img).latent_dist.sample() * SCALE
                 else:
-                    img = self.vae_model.encode(img).latent_dist.sample()
+                    img = self.vae_model.encode(img).latent_dist.sample() * SCALE
                 for idx in range(img.shape[0]):
                     unique_id = uuid.uuid4().hex
                     img_to_save = img[idx].permute(1,2,0).detach().cpu().numpy()
-                    np.save(os.path.join(save_path, "img",  f'{unique_id}'), img_to_save)
+                    np.save(os.path.join(save_path, str(int(label)),  f'{unique_id}'), img_to_save)
 
     def train(self, lr, epochs, check_preds_epoch, train_loader, val_loader, patience, loss, lr_scheduler=None):
         '''
@@ -500,7 +506,6 @@ class Diffusion:
                 x_t, noise = self.noise_images(img, t) # get batch_size noised images and the corresponding noise
 
                 optimizer.zero_grad() # set the gradients to 0
-
                 if np.random.random() < 0.1: # 10% of the time, don't pass labels (we train 10% of the times uncoditionally and 90% conditionally)
                     label = None
                 predicted_noise = model(x_t, t, label) # here we pass the plain labels to the model (e.g. 0,1,2,...,9 if there are 10 classes)
@@ -643,7 +648,7 @@ def dataloader_PRE_encoding_maker(dataset_path, image_size, batch_size, multiple
     return train_loader, num_classes
 
 def dataloader_POST_encoding_maker(dataset_path, image_size, batch_size, multiple_gpus):
-    dataset = dataset_maker(image_size, dataset_path)
+    dataset = NPYFolderDataset(dataset_path)
     num_classes = len(dataset.classes)
     if multiple_gpus:
         dataloader = DataLoader(dataset=dataset, batch_size=batch_size, shuffle=False, sampler=DistributedSampler(dataset),drop_last=True)
@@ -697,7 +702,7 @@ def UNet_model_maker(UNet_type, input_channels, output_channels, num_classes, de
         print('Using Residual DiffiT UNet')
         model = Residual_DiffiT_UNet_generation(input_channels, output_channels, num_classes, device).to(device)
     else:
-        raise ValueError('The UNet type must be either Residual Attention UNet or DiffiT UNet')
+        raise ValueError('The UNet type must be either Residual Cross Attention Unet or DiffiT UNet')
     print("Num params: ", sum(p.numel() for p in model.parameters()))
     
     return model
@@ -844,17 +849,17 @@ def launch(args):
     if lr_scheduler and lr_scheduler.lower() != 'none':
         print(f'Using {lr_scheduler} learning rate scheduler')
 
-    VAE_finetuning(dataset_path=dataset_path, image_size=image_size,
-                        batch_size=batch_size, multiple_gpus=multiple_gpus, 
-                            VAE_weight_path=VAE_weight_path, device=device)
+    # VAE_finetuning(dataset_path=dataset_path, image_size=image_size,
+    #                     batch_size=batch_size, multiple_gpus=multiple_gpus, 
+    #                         VAE_weight_path=VAE_weight_path, device=device)
 
-    # Diffusion_training(snapshot_folder_path=snapshot_folder_path, model_name=model_name, snapshot_name=snapshot_name,
-    #                     noise_steps=noise_steps, ema_smoothing=ema_smoothing,
-    #                         UNet_type=UNet_type, input_channels=input_channels, output_channels=output_channels, 
-    #                             batch_size=batch_size, image_size=image_size, multiple_gpus=multiple_gpus, 
-    #                                 noise_schedule=noise_schedule, dataset_path=dataset_path, lr=lr,
-    #                                  epochs=epochs,check_preds_epoch=check_preds_epoch, patience=patience,
-    #                                   loss=loss, lr_scheduler=lr_scheduler, device=device)
+    Diffusion_training(snapshot_folder_path=snapshot_folder_path, model_name=model_name, snapshot_name=snapshot_name,
+                        noise_steps=noise_steps, ema_smoothing=ema_smoothing,
+                            UNet_type=UNet_type, input_channels=input_channels, output_channels=output_channels, 
+                                batch_size=batch_size, image_size=image_size, multiple_gpus=multiple_gpus, 
+                                    noise_schedule=noise_schedule, dataset_path=dataset_path, lr=lr,
+                                     epochs=epochs,check_preds_epoch=check_preds_epoch, patience=patience,
+                                      loss=loss, lr_scheduler=lr_scheduler, device=device)
     
     # generation_sampling(noise_schedule, snapshot_folder_path, snapshot_name, VAE_weight_path, noise_steps, image_size, ema_smoothing,
     #                      UNet_type, model_name, generate_video, input_channels, output_channels, num_classes=None, device='cuda')

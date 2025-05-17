@@ -22,6 +22,8 @@ import uuid
 warnings.filterwarnings("ignore", category=UserWarning)
 warnings.filterwarnings("ignore", category=FutureWarning)
 import gc
+import clip
+from torchvision.transforms.functional import resize
 
 from diffusers import StableDiffusionPipeline, UNet2DConditionModel
 
@@ -153,6 +155,23 @@ class Diffusion:
         # (notice that the values inside x are not relevant)
         return sqrt_alpha_hat * x + sqrt_one_minus_alpha_hat * epsilon, epsilon
 
+    def xt_to_x0(self, x_t, t, noise_pred):
+        '''
+        This function is used to compute the x_0 from the x_t and the predicted noise. 
+        It is used in the training phase to compute the CLIP loss.
+
+        Input:
+            x_t: the image at time t
+            t: the current timestep
+            noise_pred: the predicted noise
+
+        Output:
+            x_0: the image at time t=0
+        '''
+        sqrt_alpha_hat = torch.sqrt(self.alpha_hat[t])[:, None, None, None]
+        sqrt_one_minus_alpha_hat = torch.sqrt(1 - self.alpha_hat[t])[:, None, None, None]
+        return (x_t - sqrt_one_minus_alpha_hat * noise_pred) / sqrt_alpha_hat
+    
     def sample_timesteps(self, n):
         '''
         During the training we sample t from a Uniform discrete distribution (from 1 to T)
@@ -185,7 +204,6 @@ class Diffusion:
             x: a tensor of shape (n, NDVI_channels, self.image_size, self.image_size) with the generated images
         '''
         SAR_img = SAR_img.to(self.device).unsqueeze(0)
-
         model.eval() # disables dropout and batch normalization
         with torch.no_grad(): # disables gradient calculation
             x = torch.randn((n, 4, self.image_size//8, self.image_size//8), device=self.device)
@@ -228,7 +246,7 @@ class Diffusion:
 
         # Perform inference without gradient tracking to save VRAM
         with torch.no_grad():
-            NDVI_pred_img = self.vae_model.decode(latent_NDVI_img).sample
+            NDVI_pred_img = self.vae_model.decode(latent_NDVI_img)
         
         model.train() # enables dropout and batch normalization
         return NDVI_pred_img
@@ -357,15 +375,15 @@ class Diffusion:
                 NDVI_img = torch.stack([img for img in NDVI_img]).to(device).to(torch.float32)
                 
                 if self.multiple_gpus:
-                    latents_SAR = self.vae_model.module.encode(SAR_img).latent_dist.sample()
-                    latents_NDVI = self.vae_model.module.encode(NDVI_img).latent_dist.sample()
-                    reconstructed_SAR = self.vae_model.module.decode(latents_SAR).sample
-                    reconstructed_NDVI = self.vae_model.module.decode(latents_NDVI).sample
+                    latents_SAR = self.vae_model.module.encode(SAR_img)
+                    latents_NDVI = self.vae_model.module.encode(NDVI_img)
+                    reconstructed_SAR = self.vae_model.module.decode(latents_SAR)
+                    reconstructed_NDVI = self.vae_model.module.decode(latents_NDVI)
                 else:
-                    latents_SAR = self.vae_model.encode(SAR_img).latent_dist.sample()
-                    latents_NDVI = self.vae_model.encode(NDVI_img).latent_dist.sample()
-                    reconstructed_SAR = self.vae_model.decode(latents_SAR).sample
-                    reconstructed_NDVI = self.vae_model.decode(latents_NDVI).sample
+                    latents_SAR = self.vae_model.encode(SAR_img)
+                    latents_NDVI = self.vae_model.encode(NDVI_img)
+                    reconstructed_SAR = self.vae_model.decode(latents_SAR)
+                    reconstructed_NDVI = self.vae_model.decode(latents_NDVI)
                         
                 loss = loss_fn(x_SAR=SAR_img, x_NDVI=NDVI_img, latents_SAR=latents_SAR, latents_NDVI=latents_NDVI, reconstructed_SAR=reconstructed_SAR, reconstructed_NDVI=reconstructed_NDVI)
                 # gradient accumulation 
@@ -403,6 +421,10 @@ class Diffusion:
     
     def encoded_dataset_VAE(self, dataloader, save_path):
             import numpy as np
+
+            SCALE = 0.18215 # The scaling factor is used to normalize the latent space variance to approximately 1. So that the Diffusion model (which expects 
+            # standard normal noise) can work properly.
+
             self.vae_model.eval()
             os.makedirs(os.path.join(save_path, "SAR_img"), exist_ok=True)
             os.makedirs(os.path.join(save_path, "NDVI_img"), exist_ok=True)
@@ -411,11 +433,11 @@ class Diffusion:
                 SAR_img = SAR_img.to(self.device)
                 NDVI_img = NDVI_img.to(self.device)
                 if self.multiple_gpus:
-                    SAR_img = self.vae_model.module.encode(SAR_img).latent_dist.sample()
-                    NDVI_img = self.vae_model.module.encode(NDVI_img).latent_dist.sample()
+                    SAR_img = self.vae_model.module.encode(SAR_img)
+                    NDVI_img = self.vae_model.module.encode(NDVI_img)
                 else:
-                    SAR_img = self.vae_model.encode(SAR_img).latent_dist.sample()
-                    NDVI_img = self.vae_model.encode(NDVI_img).latent_dist.sample()
+                    SAR_img = self.vae_model.encode(SAR_img) 
+                    NDVI_img = self.vae_model.encode(NDVI_img)
 
                 for idx in range(SAR_img.shape[0]):
                     unique_id = uuid.uuid4().hex
@@ -453,6 +475,9 @@ class Diffusion:
 
         if loss == 'MSE':
             loss_function = nn.MSELoss()
+        elif loss == "CLIP":
+            mse_loss = nn.MSELoss()
+            loss_function = CLIPLoss(self.vae_model, mse_loss, device=self.device, lambda_clip=0.5)
         elif loss == 'MAE':
             loss_function = nn.L1Loss()
         elif loss == 'Huber':
@@ -500,7 +525,11 @@ class Diffusion:
                 optimizer.zero_grad() # set the gradients to 0
                 predicted_noise = model(x_t, t, SAR_img) 
 
-                train_loss = loss_function(predicted_noise, noise)
+                if loss == "CLIP":
+                    x0_pred = self.xt_to_x0(x_t, t, predicted_noise)
+                    train_loss, mse_loss, clip_loss = loss_function(predicted_noise, noise, NDVI_img, x0_pred)
+                else:
+                    train_loss = loss_function(predicted_noise, noise)
                 train_loss.backward() # compute the gradients
                 optimizer.step() # update the weights
                 
@@ -555,7 +584,11 @@ class Diffusion:
                         else:
                             predicted_noise = model(x_t, t, SAR_img) 
                         
-                        val_loss = loss_function(predicted_noise, noise)
+                        if loss == "CLIP":
+                            x0_pred = self.xt_to_x0(x_t, t, predicted_noise)
+                            train_loss, mse_loss, clip_loss = loss_function(predicted_noise, noise, NDVI_img, x0_pred)
+                        else:
+                            val_loss = loss_function(predicted_noise, noise)
 
                         pbar_val.set_postfix(LOSS=val_loss.item()) # set_postfix just adds a message or value
                         # displayed after the progress bar. In this case the loss of the current batch.
@@ -638,18 +671,59 @@ class VAE_model_wrapped(nn.Module):
         super(VAE_model_wrapped, self).__init__()
         self.vae_model = vae_model
         self.in_channels = in_channels
-        self.conv = nn.Conv2d(in_channels, 3, kernel_size=3, stride=1, padding=1)
+        self.SCALE = 0.18215
+        self.conv_start = nn.Conv2d(in_channels, 3, kernel_size=3, stride=1, padding=1)
+        self.conv_end = nn.Conv2d(3, in_channels, kernel_size=3, stride=1, padding=1)
         if freeze_vae_params: #if True, the vae parameters are frozen and just the conv layer is trained
             for param in self.vae_model.parameters():
                 param.requires_grad = False
     def encode(self, x):
-        x = self.conv(x)
-        latents = self.vae_model.encode(x)
+        x = self.conv_start(x)
+        latents = self.vae_model.encode(x).latent_dist.sample() * self.SCALE
         return latents
 
     def decode(self, latents):
-        return self.vae_model.decode(latents)
+        x = self.vae_model.decode(latents).sample / self.SCALE
+        return self.conv_end(x)
 
+class CLIPLoss(nn.Module):
+    def __init__(self, vae_model, mse_loss, device='cuda', lambda_clip=0.5):
+        super(CLIPLoss, self).__init__()
+
+        self.vae_model = vae_model
+        self.device = device
+        clip_model, clip_preprocess = clip.load("ViT-B/32", device=device)
+        clip_model.eval()
+        self.clip_model = clip_model
+        self.mse_loss = mse_loss
+        self.lambda_clip = lambda_clip
+
+    def clip_preprocess_tensor(self, image_tensor):
+            # image_tensor: (B, 3, H, W) in [0, 1] range
+            image_tensor = resize(image_tensor, [224, 224])
+            image_tensor = (image_tensor - 0.48145466) / 0.26862954  # Normalize to CLIP range
+            image_tensor = image_tensor.to(torch.float32)
+            return image_tensor
+    
+    def forward(self, predicted_noise, noise, gt_latent, x0_pred):
+        with torch.no_grad():
+            decoded_pred = self.vae_model.decode(x0_pred)
+            decoded_gt = self.vae_model.decode(gt_latent)
+            # decoded_pred = decoded_pred.clamp(0,1)
+            # decoded_gt = decoded_gt.clamp(0,1)
+        decoded_pred = self.clip_preprocess_tensor(decoded_pred)
+        decoded_gt = self.clip_preprocess_tensor(decoded_gt)
+        with torch.no_grad():
+            embed_pred = self.clip_model.encode_image(decoded_pred)
+            embed_gt = self.clip_model.encode_image(decoded_gt)
+
+        clip_loss = 1 - F.cosine_similarity(embed_pred, embed_gt).mean()
+
+        mse = self.mse_loss(predicted_noise, noise)
+        total_loss = mse + self.lambda_clip * clip_loss
+
+        return total_loss, mse.item(), clip_loss.item()
+    
 def dataloader_PRE_encoding_maker(dataset_path, batch_size, multiple_gpus):
     train_path = f'{dataset_path}/train' 
     valid_path = f'{dataset_path}/test'
@@ -697,7 +771,6 @@ def UNet_model_maker(UNet_type, SAR_channels, NDVI_channels, device):
 def VAE_model_maker(device, freeze_vae_params):
     vae_model_path = "CompVis/stable-diffusion-v1-4"
     pipe = StableDiffusionPipeline.from_pretrained(vae_model_path)
-    vae_model = pipe.vae
     vae_model = pipe.vae.to(device)
     vae_model = VAE_model_wrapped(vae_model, in_channels=1, freeze_vae_params=freeze_vae_params).to(device)
     return vae_model
@@ -888,18 +961,19 @@ def launch(args):
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         print('Using single GPU')
 
-    VAE_finetuning(dataset_path=dataset_path, image_size=image_size,
-                    batch_size=batch_size, multiple_gpus=multiple_gpus, 
-                        VAE_weight_path=VAE_weight_path, device=device, freeze_vae_params=freeze_vae_params)
+    # VAE_finetuning(dataset_path=dataset_path, image_size=image_size,
+    #                 batch_size=batch_size, multiple_gpus=multiple_gpus, 
+    #                     VAE_weight_path=VAE_weight_path, device=device, freeze_vae_params=freeze_vae_params)
+    
     # SAR images have 2 channels (VV and VH) and the NDVI image 1 channel. The VAE model we use need 3 channels in input. In order to make just few adjustments we use just the
     # first SAR channels (i.e. VV), and  we add a Conv2d layer that will convert the 1 channel of SAR and NDVI to 3 channels. So, SAR_channels=NDVI_channels=1.
-    # Diffusion_training(snapshot_folder_path=snapshot_folder_path, model_name=model_name, snapshot_name=snapshot_name,
-    #                     noise_steps=noise_steps, ema_smoothing=ema_smoothing,
-    #                         UNet_type=UNet_type, SAR_channels=1, NDVI_channels=1, 
-    #                             batch_size=batch_size, image_size=image_size, multiple_gpus=multiple_gpus, 
-    #                                 noise_schedule=noise_schedule, dataset_path=dataset_path, lr=lr,
-    #                                  epochs=epochs,check_preds_epoch=check_preds_epoch, patience=patience,
-    #                                   loss=loss, lr_scheduler=lr_scheduler, device=device)
+    Diffusion_training(snapshot_folder_path=snapshot_folder_path, model_name=model_name, snapshot_name=snapshot_name,
+                        noise_steps=noise_steps, ema_smoothing=ema_smoothing,
+                            UNet_type=UNet_type, SAR_channels=1, NDVI_channels=1, 
+                                batch_size=batch_size, image_size=image_size, multiple_gpus=multiple_gpus, 
+                                    noise_schedule=noise_schedule, dataset_path=dataset_path, lr=lr,
+                                     epochs=epochs,check_preds_epoch=check_preds_epoch, patience=patience,
+                                      loss=loss, lr_scheduler=lr_scheduler, device=device)
 
     # sampling_test(noise_schedule, snapshot_folder_path, snapshot_name, VAE_weight_path, noise_steps, image_size, ema_smoothing,
     #                      UNet_type, model_name, generate_video, dataset_path, batch_size, SAR_channels, NDVI_channels, device='cuda')
