@@ -173,7 +173,7 @@ class Diffusion:
             t: a tensor of shape (n,) that contains the timesteps for each image
         '''
         return torch.randint(low=1, high=self.noise_steps, size=(n,))
-    
+
     def sample(self, n, model, target_class=None, cfg_scale=3, generate_video=False):
         '''
         As the name suggests this function is used for sampling. Therefore we want to 
@@ -544,10 +544,10 @@ class Diffusion:
                     if val_loader is None:
                         if self.ema_smoothing:
                             self._save_snapshot(epoch, ema_model)
-                            self.prediction_plot(num_classes, ema_model, train_loader, epoch)
+                            # self.prediction_plot(num_classes, ema_model, train_loader, epoch)
                         else:
                             self._save_snapshot(epoch, model)
-                            self.prediction_plot(num_classes, model, train_loader, epoch)
+                            # self.prediction_plot(num_classes, model, train_loader, epoch)
 
             if val_loader is not None:
                 with torch.no_grad():
@@ -608,7 +608,7 @@ class Diffusion:
         fig, axs = plt.subplots(num_rows_plot,5, figsize=(15,15))
 
         for i in range(num_rows_plot):
-            prediction = self.sample(n=5,model=model, target_class=torch.tensor([i], dtype=torch.int64).to(self.device), input_channels=data_loader.dataset[0][0].shape[0], generate_video=False)
+            prediction = self.sample(n=5,model=model, target_class=torch.tensor([i], dtype=torch.int64).to(self.device), generate_video=False)
             for j in range(5):
                 axs[i,j].imshow(prediction[j].permute(1,2,0).cpu().numpy())
                 axs[i,j].set_title(f'Class {i}')
@@ -732,7 +732,7 @@ def generation_sampling(noise_schedule, snapshot_folder_path, snapshot_name, VAE
     fig, axs = plt.subplots(num_rows_plot,5, figsize=(15,15))
 
     for i in range(num_rows_plot):
-        prediction = diffusion.sample(n=5,model=model, target_class=torch.tensor([i], dtype=torch.int64).to(device), input_channels=input_channels, generate_video=generate_video)
+        prediction = diffusion.sample(n=5,model=model, target_class=torch.tensor([i], dtype=torch.int64).to(device), generate_video=generate_video)
         for j in range(5):
             axs[i,j].imshow(prediction[j].permute(1,2,0).cpu().numpy())
             axs[i,j].set_title(f'Class {i}')

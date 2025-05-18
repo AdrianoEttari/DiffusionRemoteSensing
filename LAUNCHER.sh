@@ -40,13 +40,13 @@
 
 ##################### SAR TO NDVI #####################
 
-model_name="TO_REMOVE"
+model_name="Residual_MultipleMultiHeadCrossAttention_UNet_SAR_to_NDVI_StableDiffusion_gradientAccumulation_VAEapart"
 
-VAE_model_name="VAE_SAR_NDVI_finetuning_gradientAccumulation.pt"
+VAE_model_name="VAE_SAR_TO_NDVI_finetuning_gradientAccumulation.pt"
 
 ###### FINETUNING VAE ######
 dataset_path="SAR_TO_NDVI_dataset"
-python train_diffusion_SAR_TO_NDVI.py --epochs=15 --batch_size=2 --image_size=128 --lr=1e-4 --lr_scheduler="cosine" --check_preds_epoch=10 --noise_schedule="cosine" --snapshot_name=snapshot.pt --model_name="$model_name" --noise_steps=100 --patience=25 --dataset_path="$dataset_path" --generate_video=False --loss="CLIP" --UNet_type="Residual Cross Attention UNet" --multiple_gpus=False --ema_smoothing=False --VAE_weight_path="$VAE_model_name" --freeze_vae_params=True
+python train_diffusion_SAR_TO_NDVI.py --epochs=15 --batch_size=6 --image_size=128 --lr=1e-4 --lr_scheduler="cosine" --check_preds_epoch=10 --noise_schedule="cosine" --snapshot_name=snapshot.pt --model_name="$model_name" --noise_steps=1000 --patience=25 --dataset_path="$dataset_path" --generate_video=False --loss="CLIP" --UNet_type="Residual Cross Attention UNet" --multiple_gpus=False --ema_smoothing=False --VAE_weight_path="$VAE_model_name" --freeze_vae_params=False
 # FINETUNING FOR 50 EPOCHS
 
 

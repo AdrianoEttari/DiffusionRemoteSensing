@@ -961,19 +961,19 @@ def launch(args):
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         print('Using single GPU')
 
-    # VAE_finetuning(dataset_path=dataset_path, image_size=image_size,
-    #                 batch_size=batch_size, multiple_gpus=multiple_gpus, 
-    #                     VAE_weight_path=VAE_weight_path, device=device, freeze_vae_params=freeze_vae_params)
+    VAE_finetuning(dataset_path=dataset_path, image_size=image_size,
+                    batch_size=batch_size, multiple_gpus=multiple_gpus, 
+                        VAE_weight_path=VAE_weight_path, device=device, freeze_vae_params=freeze_vae_params)
     
     # SAR images have 2 channels (VV and VH) and the NDVI image 1 channel. The VAE model we use need 3 channels in input. In order to make just few adjustments we use just the
     # first SAR channels (i.e. VV), and  we add a Conv2d layer that will convert the 1 channel of SAR and NDVI to 3 channels. So, SAR_channels=NDVI_channels=1.
-    Diffusion_training(snapshot_folder_path=snapshot_folder_path, model_name=model_name, snapshot_name=snapshot_name,
-                        noise_steps=noise_steps, ema_smoothing=ema_smoothing,
-                            UNet_type=UNet_type, SAR_channels=1, NDVI_channels=1, 
-                                batch_size=batch_size, image_size=image_size, multiple_gpus=multiple_gpus, 
-                                    noise_schedule=noise_schedule, dataset_path=dataset_path, lr=lr,
-                                     epochs=epochs,check_preds_epoch=check_preds_epoch, patience=patience,
-                                      loss=loss, lr_scheduler=lr_scheduler, device=device)
+    # Diffusion_training(snapshot_folder_path=snapshot_folder_path, model_name=model_name, snapshot_name=snapshot_name,
+    #                     noise_steps=noise_steps, ema_smoothing=ema_smoothing,
+    #                         UNet_type=UNet_type, SAR_channels=1, NDVI_channels=1, 
+    #                             batch_size=batch_size, image_size=image_size, multiple_gpus=multiple_gpus, 
+    #                                 noise_schedule=noise_schedule, dataset_path=dataset_path, lr=lr,
+    #                                  epochs=epochs,check_preds_epoch=check_preds_epoch, patience=patience,
+    #                                   loss=loss, lr_scheduler=lr_scheduler, device=device)
 
     # sampling_test(noise_schedule, snapshot_folder_path, snapshot_name, VAE_weight_path, noise_steps, image_size, ema_smoothing,
     #                      UNet_type, model_name, generate_video, dataset_path, batch_size, SAR_channels, NDVI_channels, device='cuda')
