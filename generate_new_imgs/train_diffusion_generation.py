@@ -729,11 +729,11 @@ def generation_sampling(noise_schedule, snapshot_folder_path, snapshot_name, VAE
         device=device, image_size=image_size, model_name=model_name,
         multiple_gpus=False, ema_smoothing=ema_smoothing)
 
-    fig, axs = plt.subplots(num_rows_plot,5, figsize=(15,15))
-
+    num_imgs_per_class = 3
+    fig, axs = plt.subplots(num_rows_plot,num_imgs_per_class, figsize=(15,15))
     for i in range(num_rows_plot):
-        prediction = diffusion.sample(n=5,model=model, target_class=torch.tensor([i], dtype=torch.int64).to(device), generate_video=generate_video)
-        for j in range(5):
+        prediction = diffusion.sample(n=num_imgs_per_class,model=model, target_class=torch.tensor([i], dtype=torch.int64).to(device), generate_video=generate_video)
+        for j in range(num_imgs_per_class):
             axs[i,j].imshow(prediction[j].permute(1,2,0).cpu().numpy())
             axs[i,j].set_title(f'Class {i}')
 
@@ -830,6 +830,7 @@ def launch(args):
     multiple_gpus = args.multiple_gpus
     ema_smoothing = args.ema_smoothing
     VAE_weight_path = args.VAE_weight_path
+    num_classes=args.num_classes
 
     if ema_smoothing:
         print('Using EMA smoothing')
@@ -853,16 +854,16 @@ def launch(args):
     #                     batch_size=batch_size, multiple_gpus=multiple_gpus, 
     #                         VAE_weight_path=VAE_weight_path, device=device)
 
-    Diffusion_training(snapshot_folder_path=snapshot_folder_path, model_name=model_name, snapshot_name=snapshot_name,
-                        noise_steps=noise_steps, ema_smoothing=ema_smoothing,
-                            UNet_type=UNet_type, input_channels=input_channels, output_channels=output_channels, 
-                                batch_size=batch_size, image_size=image_size, multiple_gpus=multiple_gpus, 
-                                    noise_schedule=noise_schedule, dataset_path=dataset_path, lr=lr,
-                                     epochs=epochs,check_preds_epoch=check_preds_epoch, patience=patience,
-                                      loss=loss, lr_scheduler=lr_scheduler, device=device)
+    # Diffusion_training(snapshot_folder_path=snapshot_folder_path, model_name=model_name, snapshot_name=snapshot_name,
+    #                     noise_steps=noise_steps, ema_smoothing=ema_smoothing,
+    #                         UNet_type=UNet_type, input_channels=input_channels, output_channels=output_channels, 
+    #                             batch_size=batch_size, image_size=image_size, multiple_gpus=multiple_gpus, 
+    #                                 noise_schedule=noise_schedule, dataset_path=dataset_path, lr=lr,
+    #                                  epochs=epochs,check_preds_epoch=check_preds_epoch, patience=patience,
+    #                                   loss=loss, lr_scheduler=lr_scheduler, device=device)
     
-    # generation_sampling(noise_schedule, snapshot_folder_path, snapshot_name, VAE_weight_path, noise_steps, image_size, ema_smoothing,
-    #                      UNet_type, model_name, generate_video, input_channels, output_channels, num_classes=None, device='cuda')
+    generation_sampling(noise_schedule, snapshot_folder_path, snapshot_name, VAE_weight_path, noise_steps, image_size, ema_smoothing,
+                         UNet_type, model_name, generate_video, input_channels=4, output_channels=4, num_classes=num_classes, device='cuda')
 
 
 if __name__ == '__main__':
@@ -892,9 +893,10 @@ if __name__ == '__main__':
     parser.add_argument('--multiple_gpus', type=str2bool, nargs='?', const=True, default=False)
     parser.add_argument('--ema_smoothing', type=str2bool, nargs='?', const=True, default=False)
     parser.add_argument('--VAE_weight_path', type=str, default=None)
+    parser.add_argument('--num_classes',type=int, default=None)
     args = parser.parse_args()
     if args.model_name:
-        args.snapshot_folder_path = os.path.join('..', 'models_run', args.model_name)
+        args.snapshot_folder_path = os.path.join('..', 'models_run',  args.model_name, "weights")
     else:
         args.snapshot_folder_path = None
 
