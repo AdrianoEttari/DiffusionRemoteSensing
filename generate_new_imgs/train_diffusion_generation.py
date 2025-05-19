@@ -6,7 +6,7 @@ import torchvision.transforms as transforms
 from tqdm import tqdm
 from torch.utils.data import DataLoader
 import copy
-from utils import video_maker, CosineAnnealingWarmupRestarts, dataset_maker, NPYFolderDataset
+from utils import video_maker, CosineAnnealingWarmupRestarts, dataset_maker, NPYFolderDataset, GlobalMinMaxScaler, compute_global_min_max
 import numpy as np
 import torchvision.datasets as datasets
 
@@ -647,8 +647,10 @@ def dataloader_PRE_encoding_maker(dataset_path, image_size, batch_size, multiple
 
     return train_loader, num_classes
 
-def dataloader_POST_encoding_maker(dataset_path, image_size, batch_size, multiple_gpus):
-    dataset = NPYFolderDataset(dataset_path)
+def dataloader_POST_encoding_maker(dataset_path, batch_size, multiple_gpus):
+    global_min, global_max = compute_global_min_max(dataset_path)
+    transform = GlobalMinMaxScaler(global_min, global_max)
+    dataset = NPYFolderDataset(dataset_path, transform=transform)
     num_classes = len(dataset.classes)
     if multiple_gpus:
         dataloader = DataLoader(dataset=dataset, batch_size=batch_size, shuffle=False, sampler=DistributedSampler(dataset),drop_last=True)
@@ -752,7 +754,7 @@ def Diffusion_training(snapshot_folder_path, model_name, snapshot_name,
 
     ########## CREATE DATALOADERS FOR THE POST-ENCODING MODEL ##########
     encoded_images_train_save_path = os.path.join(dataset_path)
-    train_loader, num_classes = dataloader_POST_encoding_maker(dataset_path=encoded_images_train_save_path, image_size=image_size, batch_size=batch_size, multiple_gpus=multiple_gpus)
+    train_loader, num_classes = dataloader_POST_encoding_maker(dataset_path=encoded_images_train_save_path, batch_size=batch_size, multiple_gpus=multiple_gpus)
     val_loader = None
 
     model = UNet_model_maker(UNet_type, input_channels, output_channels, num_classes, device)
@@ -854,16 +856,16 @@ def launch(args):
     #                     batch_size=batch_size, multiple_gpus=multiple_gpus, 
     #                         VAE_weight_path=VAE_weight_path, device=device)
 
-    # Diffusion_training(snapshot_folder_path=snapshot_folder_path, model_name=model_name, snapshot_name=snapshot_name,
-    #                     noise_steps=noise_steps, ema_smoothing=ema_smoothing,
-    #                         UNet_type=UNet_type, input_channels=input_channels, output_channels=output_channels, 
-    #                             batch_size=batch_size, image_size=image_size, multiple_gpus=multiple_gpus, 
-    #                                 noise_schedule=noise_schedule, dataset_path=dataset_path, lr=lr,
-    #                                  epochs=epochs,check_preds_epoch=check_preds_epoch, patience=patience,
-    #                                   loss=loss, lr_scheduler=lr_scheduler, device=device)
+    Diffusion_training(snapshot_folder_path=snapshot_folder_path, model_name=model_name, snapshot_name=snapshot_name,
+                        noise_steps=noise_steps, ema_smoothing=ema_smoothing,
+                            UNet_type=UNet_type, input_channels=input_channels, output_channels=output_channels, 
+                                batch_size=batch_size, image_size=image_size, multiple_gpus=multiple_gpus, 
+                                    noise_schedule=noise_schedule, dataset_path=dataset_path, lr=lr,
+                                     epochs=epochs,check_preds_epoch=check_preds_epoch, patience=patience,
+                                      loss=loss, lr_scheduler=lr_scheduler, device=device)
     
-    generation_sampling(noise_schedule, snapshot_folder_path, snapshot_name, VAE_weight_path, noise_steps, image_size, ema_smoothing,
-                         UNet_type, model_name, generate_video, input_channels=4, output_channels=4, num_classes=num_classes, device='cuda')
+    # generation_sampling(noise_schedule, snapshot_folder_path, snapshot_name, VAE_weight_path, noise_steps, image_size, ema_smoothing,
+    #                      UNet_type, model_name, generate_video, input_channels=4, output_channels=4, num_classes=num_classes, device='cuda')
 
 
 if __name__ == '__main__':

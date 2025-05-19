@@ -167,6 +167,7 @@ def get_real_to_model_classes_dict(num_classes):
 
     real_to_model_classes_dict = {idxs[i]:int(sorted_idxs[i]) for i in range(len(sorted_idxs))} 
     return real_to_model_classes_dict
+
 class CustomImageFolder(datasets.ImageFolder):
     def find_classes(self, directory):
         '''
@@ -197,19 +198,41 @@ def dataset_maker(image_size, dataset_path):
     dataset = CustomImageFolder(data_path, transform=transform)
     return dataset
 
+import numpy as np
+import os
+
+def compute_global_min_max(root_dir):
+    data_path = f'../{root_dir}' if os.path.exists(f'../{root_dir}') else root_dir
+
+    global_min = float('inf')
+    global_max = float('-inf')
+    for class_name in os.listdir(data_path):
+        class_path = os.path.join(data_path, class_name)
+        if os.path.isdir(class_path):
+            for fname in os.listdir(class_path):
+                if fname.endswith(".npy"):
+                    arr = np.load(os.path.join(class_path, fname))
+                    global_min = min(global_min, arr.min())
+                    global_max = max(global_max, arr.max())
+
+    return global_min, global_max
+
+class GlobalMinMaxScaler:
+    def __init__(self, global_min, global_max):
+        self.global_min = global_min
+        self.global_max = global_max
+
+    def __call__(self, arr):
+        return 2 * (arr - self.global_min) / (self.global_max - self.global_min) - 1
 
 class NPYFolderDataset(Dataset):
-    def __init__(self, root_dir):
+    def __init__(self, root_dir, transform=None):
         self.samples = []
         self.class_to_idx = {}
         self.classes = []
+        self.transform = transform
 
-        data_path = f'../{root_dir}'
-        if os.path.exists(data_path):
-            print(f"dataset found at ../{data_path}")
-        else:
-            data_path = f'{root_dir}'
-        # Identify class folders
+        data_path = f'../{root_dir}' if os.path.exists(f'../{root_dir}') else root_dir
         for class_name in sorted(os.listdir(data_path), key=lambda x: int(x) if x.isdigit() else x):
             class_path = os.path.join(data_path, class_name)
             if os.path.isdir(class_path):
@@ -226,15 +249,16 @@ class NPYFolderDataset(Dataset):
 
     def __getitem__(self, idx):
         path, label = self.samples[idx]
-        arr = np.load(path)
+        arr = np.load(path).astype(np.float32)
+        if self.transform:
+            arr = self.transform(arr)
 
-        
-        transform = transforms.Compose([
-        transforms.ToTensor(),
-            ]) 
-        tensor = transform(arr)
+        # tensor = torch.from_numpy(arr)
+        tensor = transforms.ToTensor()(arr)
 
         return tensor, label
+
+
 
 
 if __name__=="__main__":

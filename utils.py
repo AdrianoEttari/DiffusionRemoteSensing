@@ -40,6 +40,20 @@ def add_Gaussian_noise(img, noise_level1=2, noise_level2=25):
     img = torch.tensor(img).permute(2,0,1).to(torch.float)
     return img
 
+def compute_global_min_max(root_dir):
+    global_min = float('inf')
+    global_max = float('-inf')
+    for img_type in os.listdir(root_dir):
+        img_type_path = os.path.join(root_dir, img_type)
+        if os.path.isdir(img_type_path):
+            for fname in os.listdir(img_type_path):
+                if fname.endswith(".npy"):
+                    arr = np.load(os.path.join(img_type_path, fname))
+                    global_min = min(global_min, arr.min())
+                    global_max = max(global_max, arr.max())
+
+    return global_min, global_max
+
 class get_data_SAR_TO_NDVI(Dataset):
     '''
     This class allows to store the data in a Dataset that can be used in a DataLoader
@@ -54,8 +68,9 @@ class get_data_SAR_TO_NDVI(Dataset):
 
     __getitem__ returns sar_img and ndvi_img. The split in batches must be done in the DataLoader (not here).
     '''
-    def __init__(self, root_dir, transform=None, data_format='torch'):
+    def __init__(self, root_dir, SAR_channels, transform=None, data_format='torch'):
         self.root_dir = root_dir
+        self.SAR_channels = SAR_channels
         self.transform = transform
         self.opt_path = os.path.join(self.root_dir, 'opt')
         self.sar_path = os.path.join(self.root_dir, 'sar')
@@ -77,8 +92,10 @@ class get_data_SAR_TO_NDVI(Dataset):
         elif self.data_format == 'numpy':
             sar_img = np.load(sar_path)
             ndvi_img = np.load(ndvi_path)
-            sar_img = torch.tensor(sar_img).to(torch.float)
-            ndvi_img = torch.tensor(ndvi_img).to(torch.float)
+            # sar_img = torch.tensor(sar_img).to(torch.float)
+            # ndvi_img = torch.tensor(ndvi_img).to(torch.float)
+            sar_img = transforms.ToTensor()(sar_img)
+            ndvi_img = transforms.ToTensor()(ndvi_img)
         elif self.data_format == 'torch':
             sar_img = torch.load(sar_path)
             ndvi_img = torch.load(ndvi_path)
@@ -87,11 +104,13 @@ class get_data_SAR_TO_NDVI(Dataset):
             sar_img = self.transform(sar_img)
             ndvi_img = self.transform(ndvi_img)
 
+        import ipdb; ipdb.set_trace()
         # Bring the images to the range [0,1] (assume they are in the range [-1,1])
         sar_img = (sar_img+1)/2
         ndvi_img = (ndvi_img+1)/2
 
-        sar_img = sar_img[0,:,:].unsqueeze(0) # TAKE JUST THE VV CHANNEL OF SAR IMAGES
+        if self.SAR_channels == 1:
+            sar_img = sar_img[0,:,:].unsqueeze(0) # TAKE JUST THE VV CHANNEL OF SAR IMAGES
         return sar_img, ndvi_img
     
 class get_data_superres(Dataset):
@@ -271,10 +290,9 @@ class get_data_superres_PLAIN(Dataset):
     def __getitem__(self, idx):
         lr_img_path = os.path.join(self.lr_imgs_folder, self.filenames[idx])
         hr_img_path = os.path.join(self.hr_imgs_folder, self.filenames[idx])
-
+        
         lr_img = np.load(lr_img_path)
         hr_img = np.load(hr_img_path)
-        
         transform = transforms.ToTensor()
         lr_img = transform(lr_img)
         hr_img = transform(hr_img)

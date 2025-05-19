@@ -380,6 +380,7 @@ class Residual_Attention_UNet_generation(nn.Module):
 
         if y is not None:
             t += self.label_emb(y)
+
         # INITIAL CONVOLUTION
         x = self.conv0(x)
         

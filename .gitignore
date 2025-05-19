@@ -179,7 +179,7 @@ WRONG-OLD/
 Napoli_sentinel2/
 celebA_*/
 generate_new_imgs/Cifar10/
-SAR_TO_NDVI_dataset/
+SAR_TO_NDVI_dataset*/
 Tiny_ImageNet_200/
 ImageNet256/
 ImageNet256_small/

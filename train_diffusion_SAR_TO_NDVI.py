@@ -422,12 +422,9 @@ class Diffusion:
     def encoded_dataset_VAE(self, dataloader, save_path):
             import numpy as np
 
-            SCALE = 0.18215 # The scaling factor is used to normalize the latent space variance to approximately 1. So that the Diffusion model (which expects 
-            # standard normal noise) can work properly.
-
             self.vae_model.eval()
-            os.makedirs(os.path.join(save_path, "SAR_img"), exist_ok=True)
-            os.makedirs(os.path.join(save_path, "NDVI_img"), exist_ok=True)
+            os.makedirs(os.path.join(save_path, "sar"), exist_ok=True)
+            os.makedirs(os.path.join(save_path, "opt"), exist_ok=True)
             pbar_dataloader = tqdm(dataloader, desc='Encoding dataset', position=0)
             for i,(SAR_img,NDVI_img) in enumerate(pbar_dataloader):
                 SAR_img = SAR_img.to(self.device)
@@ -443,8 +440,8 @@ class Diffusion:
                     unique_id = uuid.uuid4().hex
                     SAR_img_to_save = SAR_img[idx].permute(1,2,0).detach().cpu().numpy()
                     NDVI_img_to_save = NDVI_img[idx].permute(1,2,0).detach().cpu().numpy()
-                    np.save(os.path.join(save_path, "SAR_img",  f'{unique_id}'), SAR_img_to_save)
-                    np.save(os.path.join(save_path, "NDVI_img",  f'{unique_id}'), NDVI_img_to_save)
+                    np.save(os.path.join(save_path, "sar",  f'{unique_id}'), SAR_img_to_save)
+                    np.save(os.path.join(save_path, "opt",  f'{unique_id}'), NDVI_img_to_save)
 
     def train(self, lr, epochs, check_preds_epoch, train_loader, val_loader, patience, loss, lr_scheduler=None):
         '''
@@ -625,7 +622,7 @@ class Diffusion:
             SAR_img = data_loader.dataset[i][0].to(self.device)
             NDVI_img = data_loader.dataset[i][1].to(self.device)
 
-            NDVI_pred_img = self.sample(n=1,model=model, SAR_img=SAR_img, NDVI_channels=1, generate_video=False)
+            NDVI_pred_img = self.sample(n=1,model=model, SAR_img=SAR_img, generate_video=False)
             
             axs[i,0].imshow(SAR_img[0].unsqueeze(0).permute(1,2,0).cpu().numpy())
             axs[i,0].set_title('SAR image')
@@ -711,8 +708,8 @@ class CLIPLoss(nn.Module):
             decoded_gt = self.vae_model.decode(gt_latent)
             # decoded_pred = decoded_pred.clamp(0,1)
             # decoded_gt = decoded_gt.clamp(0,1)
-        decoded_pred = self.clip_preprocess_tensor(decoded_pred)
-        decoded_gt = self.clip_preprocess_tensor(decoded_gt)
+        decoded_pred = self.clip_preprocess_tensor(decoded_pred).repeat(1, 3, 1, 1)
+        decoded_gt = self.clip_preprocess_tensor(decoded_gt).repeat(1, 3, 1, 1)
         with torch.no_grad():
             embed_pred = self.clip_model.encode_image(decoded_pred)
             embed_gt = self.clip_model.encode_image(decoded_gt)
@@ -728,8 +725,8 @@ def dataloader_PRE_encoding_maker(dataset_path, batch_size, multiple_gpus):
     train_path = f'{dataset_path}/train' 
     valid_path = f'{dataset_path}/test'
 
-    train_dataset = get_data_SAR_TO_NDVI(train_path)
-    val_dataset = get_data_SAR_TO_NDVI(valid_path)
+    train_dataset = get_data_SAR_TO_NDVI(train_path,SAR_channels=1)
+    val_dataset = get_data_SAR_TO_NDVI(valid_path,SAR_channels=1)
 
     if multiple_gpus:
         train_loader = DataLoader(dataset=train_dataset, batch_size=batch_size, shuffle=False, sampler=DistributedSampler(train_dataset))
@@ -742,7 +739,7 @@ def dataloader_PRE_encoding_maker(dataset_path, batch_size, multiple_gpus):
 
 def dataloader_POST_encoding_maker(dataset_path, batch_size, multiple_gpus):
     ####### TO ADJUST #######
-    dataset = get_data_SAR_TO_NDVI(dataset_path)
+    dataset = get_data_SAR_TO_NDVI(dataset_path, SAR_channels=4, data_format="numpy")
     if multiple_gpus:
         dataloader = DataLoader(dataset=dataset, batch_size=batch_size, shuffle=False, sampler=DistributedSampler(dataset),drop_last=True)
     else:
@@ -813,7 +810,8 @@ def VAE_finetuning(dataset_path, image_size, batch_size, multiple_gpus, VAE_weig
         #                 os.rename(os.path.join(set_path, "img", img_name), os.path.join(set_path, "img", str(i+50000)+".npy"))
 
 def Diffusion_training(snapshot_folder_path, model_name, snapshot_name,
-                        noise_steps, ema_smoothing, UNet_type, SAR_channels, NDVI_channels, 
+                        noise_steps, ema_smoothing, UNet_type, SAR_channels, NDVI_channels,
+                        VAE_weight_path, 
                                 batch_size, image_size, multiple_gpus, 
                                     noise_schedule, dataset_path, lr,
                                      epochs,check_preds_epoch, patience,
@@ -829,10 +827,11 @@ def Diffusion_training(snapshot_folder_path, model_name, snapshot_name,
 
     snapshot_path = os.path.join(snapshot_folder_path, snapshot_name)
     
+    vae_model = VAE_model_maker(device, freeze_vae_params=True)
     diffusion = Diffusion(
-        noise_schedule=noise_schedule, model=model, vae_model=None,
+        noise_schedule=noise_schedule, model=model, vae_model=vae_model,
         snapshot_path=snapshot_path,
-        VAE_weight_path=None,
+        VAE_weight_path=VAE_weight_path,
         noise_steps=noise_steps, beta_start=1e-4, beta_end=0.02 ,device=device,
         image_size=image_size, model_name=model_name,
         multiple_gpus=multiple_gpus, ema_smoothing=ema_smoothing)
@@ -961,19 +960,20 @@ def launch(args):
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         print('Using single GPU')
 
-    VAE_finetuning(dataset_path=dataset_path, image_size=image_size,
-                    batch_size=batch_size, multiple_gpus=multiple_gpus, 
-                        VAE_weight_path=VAE_weight_path, device=device, freeze_vae_params=freeze_vae_params)
+    # VAE_finetuning(dataset_path=dataset_path, image_size=image_size,
+    #                 batch_size=batch_size, multiple_gpus=multiple_gpus, 
+    #                     VAE_weight_path=VAE_weight_path, device=device, freeze_vae_params=freeze_vae_params)
     
     # SAR images have 2 channels (VV and VH) and the NDVI image 1 channel. The VAE model we use need 3 channels in input. In order to make just few adjustments we use just the
     # first SAR channels (i.e. VV), and  we add a Conv2d layer that will convert the 1 channel of SAR and NDVI to 3 channels. So, SAR_channels=NDVI_channels=1.
-    # Diffusion_training(snapshot_folder_path=snapshot_folder_path, model_name=model_name, snapshot_name=snapshot_name,
-    #                     noise_steps=noise_steps, ema_smoothing=ema_smoothing,
-    #                         UNet_type=UNet_type, SAR_channels=1, NDVI_channels=1, 
-    #                             batch_size=batch_size, image_size=image_size, multiple_gpus=multiple_gpus, 
-    #                                 noise_schedule=noise_schedule, dataset_path=dataset_path, lr=lr,
-    #                                  epochs=epochs,check_preds_epoch=check_preds_epoch, patience=patience,
-    #                                   loss=loss, lr_scheduler=lr_scheduler, device=device)
+    Diffusion_training(snapshot_folder_path=snapshot_folder_path, model_name=model_name, snapshot_name=snapshot_name,
+                        noise_steps=noise_steps, ema_smoothing=ema_smoothing,
+                            UNet_type=UNet_type, SAR_channels=4, NDVI_channels=4, 
+                            VAE_weight_path=VAE_weight_path,
+                                batch_size=batch_size, image_size=image_size, multiple_gpus=multiple_gpus, 
+                                    noise_schedule=noise_schedule, dataset_path=dataset_path, lr=lr,
+                                     epochs=epochs, check_preds_epoch=check_preds_epoch, patience=patience,
+                                      loss=loss, lr_scheduler=lr_scheduler, device=device)
 
     # sampling_test(noise_schedule, snapshot_folder_path, snapshot_name, VAE_weight_path, noise_steps, image_size, ema_smoothing,
     #                      UNet_type, model_name, generate_video, dataset_path, batch_size, SAR_channels, NDVI_channels, device='cuda')
