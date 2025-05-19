@@ -12,7 +12,7 @@ VAE_model_name="VAE_102flowers_finetuning_gradientAccumulation.pt"
 
 ###### DIFFUSION TRAINING ######
 dataset_path="102flowers_dataset_VAE_encoded"
-python train_diffusion_generation.py --epochs=2 --batch_size=1 --image_size=64 --lr=1e-4 --lr_schedule="cosine" --check_preds_epoch=10 --noise_schedule="cosine" --snapshot_name=snapshot.pt --model_name="$model_name" --noise_steps=2 --patience=25  --dataset_path="$dataset_path" --inp_out_channels=4 --generate_video="False" --loss="MSE" --UNet_type="Residual Cross Attention Unet" --multiple_gpus="False" --ema_smoothing="False" --VAE_weight_path="$VAE_model_name" 
+python train_diffusion_generation.py --epochs=2 --batch_size=6 --image_size=512 --lr=1e-3 --lr_schedule="cosine" --check_preds_epoch=10 --noise_schedule="cosine" --snapshot_name=snapshot.pt --model_name="$model_name" --noise_steps=2 --patience=25  --dataset_path="$dataset_path" --inp_out_channels=4 --generate_video="False" --loss="MSE" --UNet_type="Residual Cross Attention Unet" --multiple_gpus="False" --ema_smoothing="False" --VAE_weight_path="$VAE_model_name" 
 
 ###### SAMPLING ######
 # dataset_path="102flowers_dataset"
