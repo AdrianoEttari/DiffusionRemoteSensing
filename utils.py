@@ -104,7 +104,6 @@ class get_data_SAR_TO_NDVI(Dataset):
             sar_img = self.transform(sar_img)
             ndvi_img = self.transform(ndvi_img)
 
-        import ipdb; ipdb.set_trace()
         # Bring the images to the range [0,1] (assume they are in the range [-1,1])
         sar_img = (sar_img+1)/2
         ndvi_img = (ndvi_img+1)/2
