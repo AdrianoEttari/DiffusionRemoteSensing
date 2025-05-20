@@ -187,19 +187,17 @@ def dataset_maker(image_size, dataset_path):
     transform = transforms.Compose([
     transforms.Resize((image_size, image_size)),
     transforms.ToTensor(),
-        ]) 
+        ]) # transforms.ToTensor() normalizes data to [0,1] if they range in [0,255] and they are uint8
+        
     data_path = f'../{dataset_path}'
     if os.path.exists(data_path):
         print(f"dataset found at ../{dataset_path}")
     else:
         data_path = f'{dataset_path}'
-
+    
     # dataset = datasets.ImageFolder(data_path, transform=transform)
     dataset = CustomImageFolder(data_path, transform=transform)
     return dataset
-
-import numpy as np
-import os
 
 def compute_global_min_max(root_dir):
     data_path = f'../{root_dir}' if os.path.exists(f'../{root_dir}') else root_dir
@@ -214,7 +212,8 @@ def compute_global_min_max(root_dir):
                     arr = np.load(os.path.join(class_path, fname))
                     global_min = min(global_min, arr.min())
                     global_max = max(global_max, arr.max())
-
+                else:
+                    raise ValueError(f"The files are not in numpy type. {fname}")
     return global_min, global_max
 
 class GlobalMinMaxScaler:

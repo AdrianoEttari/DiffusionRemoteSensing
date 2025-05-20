@@ -40,19 +40,6 @@ def add_Gaussian_noise(img, noise_level1=2, noise_level2=25):
     img = torch.tensor(img).permute(2,0,1).to(torch.float)
     return img
 
-def compute_global_min_max(root_dir):
-    global_min = float('inf')
-    global_max = float('-inf')
-    for img_type in os.listdir(root_dir):
-        img_type_path = os.path.join(root_dir, img_type)
-        if os.path.isdir(img_type_path):
-            for fname in os.listdir(img_type_path):
-                if fname.endswith(".npy"):
-                    arr = np.load(os.path.join(img_type_path, fname))
-                    global_min = min(global_min, arr.min())
-                    global_max = max(global_max, arr.max())
-
-    return global_min, global_max
 
 class get_data_SAR_TO_NDVI(Dataset):
     '''
@@ -99,14 +86,13 @@ class get_data_SAR_TO_NDVI(Dataset):
         elif self.data_format == 'torch':
             sar_img = torch.load(sar_path)
             ndvi_img = torch.load(ndvi_path)
-
         if self.transform:
             sar_img = self.transform(sar_img)
             ndvi_img = self.transform(ndvi_img)
 
         # Bring the images to the range [0,1] (assume they are in the range [-1,1])
-        sar_img = (sar_img+1)/2
-        ndvi_img = (ndvi_img+1)/2
+        # sar_img = (sar_img+1)/2
+        # ndvi_img = (ndvi_img+1)/2
 
         if self.SAR_channels == 1:
             sar_img = sar_img[0,:,:].unsqueeze(0) # TAKE JUST THE VV CHANNEL OF SAR IMAGES
@@ -147,7 +133,6 @@ class get_data_superres(Dataset):
 
     def __getitem__(self, idx):
         y_path = os.path.join(self.original_imgs_dir, self.y_filenames[idx])
-
         if self.data_format == 'PIL':
             y = Image.open(y_path)
         elif self.data_format == 'numpy':
@@ -158,6 +143,10 @@ class get_data_superres(Dataset):
             y = torch.load(y_path)
             y = to_pil(y)
 
+        # Check if images are uint8 and in 0-255 range
+        if not (y.dtype == np.uint8 and y.min() >= 0 and y.max() <= 255):
+            raise ValueError(f"The images are not uint8 or are not ranged [0,255]. This makes the normalization invalid.")
+        
         if self.transform:
             y = self.transform(y)
 
@@ -276,9 +265,39 @@ class get_data_superres_BSRGAN(Dataset):
 
         return x, y
     
+def compute_global_min_max(root_dir):
+    data_path = f'../{root_dir}' if os.path.exists(f'../{root_dir}') else root_dir
+
+    global_min = float('inf')
+    global_max = float('-inf')
+    for class_name in os.listdir(data_path):
+        class_path = os.path.join(data_path, class_name)
+        if os.path.isdir(class_path):
+            for fname in os.listdir(class_path):
+                if fname.endswith(".npy"):
+                    arr = np.load(os.path.join(class_path, fname))
+                    global_min = min(global_min, arr.min())
+                    global_max = max(global_max, arr.max())
+                elif fname.endswith(".pt"):
+                    arr = torch.load(os.path.join(class_path, fname))
+                    global_min = min(global_min, arr.min())
+                    global_max = max(global_max, arr.max())
+                else:
+                    raise ValueError(f"The files are not in numpy type. {fname}")
+    return global_min, global_max
+
+class GlobalMinMaxScaler:
+    def __init__(self, global_min, global_max):
+        self.global_min = global_min
+        self.global_max = global_max
+
+    def __call__(self, arr):
+        return 2 * (arr - self.global_min) / (self.global_max - self.global_min) - 1
+    
 class get_data_superres_PLAIN(Dataset):
-    def __init__(self, root_dir):
+    def __init__(self, root_dir, transform):
         self.root_dir = root_dir
+        self.transform = transform
         self.lr_imgs_folder = os.path.join(root_dir, 'lr_img')
         self.hr_imgs_folder = os.path.join(root_dir, 'hr_img')
         self.filenames = sorted(os.listdir(self.lr_imgs_folder)) # lr_img and hr_img filenames are the same
@@ -289,13 +308,10 @@ class get_data_superres_PLAIN(Dataset):
     def __getitem__(self, idx):
         lr_img_path = os.path.join(self.lr_imgs_folder, self.filenames[idx])
         hr_img_path = os.path.join(self.hr_imgs_folder, self.filenames[idx])
-        
         lr_img = np.load(lr_img_path)
         hr_img = np.load(hr_img_path)
-        transform = transforms.ToTensor()
-        lr_img = transform(lr_img)
-        hr_img = transform(hr_img)
-
+        lr_img = transforms.ToTensor()(self.transform(lr_img))
+        hr_img = transforms.ToTensor()(self.transform(hr_img))
         return lr_img, hr_img
 
 class get_data_patches_lr(Dataset):

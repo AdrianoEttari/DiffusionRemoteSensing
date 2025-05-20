@@ -5,9 +5,9 @@ import torch.nn as nn
 from tqdm import tqdm
 from torch.utils.data import DataLoader
 from torchvision import transforms, models
-from utils import get_data_SAR_TO_NDVI, video_maker, CosineAnnealingWarmupRestarts
+from utils import get_data_SAR_TO_NDVI, video_maker, CosineAnnealingWarmupRestarts, compute_global_min_max, GlobalMinMaxScaler
 import copy
-
+import numpy as np
 from UNet_model_SAR_TO_NDVI_CrossAttention import Residual_CrossAttention_UNet_SAR_TO_NDVI, EMA
 
 from torch.nn.parallel import DistributedDataParallel as DDP
@@ -203,7 +203,9 @@ class Diffusion:
         Output:
             x: a tensor of shape (n, NDVI_channels, self.image_size, self.image_size) with the generated images
         '''
+        self.vae_model.eval()
         SAR_img = SAR_img.to(self.device).unsqueeze(0)
+        SAR_img = self.vae_model.encode(SAR_img)
         model.eval() # disables dropout and batch normalization
         with torch.no_grad(): # disables gradient calculation
             x = torch.randn((n, 4, self.image_size//8, self.image_size//8), device=self.device)
@@ -228,15 +230,23 @@ class Diffusion:
                 x = 1 / torch.sqrt(alpha) * (x - ((1 - alpha) / (torch.sqrt(1 - alpha_hat))) * predicted_noise) + torch.sqrt(beta) * noise
                 if generate_video == True:
                     frames.append(x)
+                # if i % 100 == 0:
+                #     import ipdb; ipdb.set_trace()
+                #     fig, axs = plt.subplots(1,2);axs[0].imshow(SAR_img[0][:3,:,:].permute(1,2,0).detach().cpu());axs[1].imshow(x[0][:3,:,:].permute(1,2,0).detach().cpu())
         if generate_video == True:
             video_maker(frames, os.path.join(os.getcwd(), 'models_run', self.model_name, 'results', 'video_denoising.mp4'), 100)
             del frames
+
+        global_min = float(np.load(os.path.join(os.path.dirname(os.path.dirname(self.snapshot_path)), "global_min.npy")))
+        global_max = float(np.load(os.path.join(os.path.dirname(os.path.dirname(self.snapshot_path)), "global_max.npy")))
+        
+        x = (x+1)*(global_max-global_min)/2 +global_min
 
         latent_NDVI_img = x
         latent_SAR_img = SAR_img
 
         # Delete unnecessary tensors to remove references
-        del SAR_img, x, frames, predicted_noise, noise  
+        del SAR_img, x, predicted_noise, noise  
 
         # Force Python garbage collection
         gc.collect()
@@ -514,7 +524,7 @@ class Diffusion:
             for i,(SAR_img,NDVI_img) in enumerate(pbar_train):
                 SAR_img = SAR_img.to(self.device)
                 NDVI_img = NDVI_img.to(self.device)
-
+                
                 t = self.sample_timesteps(NDVI_img.shape[0]).to(self.device)
                 # t is a unidimensional tensor of shape (NDVI_img.shape[0] that is the batch_size) with random integers from 1 to noise_steps.
                 x_t, noise = self.noise_images(NDVI_img, t) # get the noisy images
@@ -725,8 +735,8 @@ def dataloader_PRE_encoding_maker(dataset_path, batch_size, multiple_gpus):
     train_path = f'{dataset_path}/train' 
     valid_path = f'{dataset_path}/test'
 
-    train_dataset = get_data_SAR_TO_NDVI(train_path,SAR_channels=1)
-    val_dataset = get_data_SAR_TO_NDVI(valid_path,SAR_channels=1)
+    train_dataset = get_data_SAR_TO_NDVI(train_path,SAR_channels=1,transform=None)
+    val_dataset = get_data_SAR_TO_NDVI(valid_path,SAR_channels=1,transform=None)
 
     if multiple_gpus:
         train_loader = DataLoader(dataset=train_dataset, batch_size=batch_size, shuffle=False, sampler=DistributedSampler(train_dataset))
@@ -738,13 +748,14 @@ def dataloader_PRE_encoding_maker(dataset_path, batch_size, multiple_gpus):
     return train_loader, val_loader
 
 def dataloader_POST_encoding_maker(dataset_path, batch_size, multiple_gpus):
-    ####### TO ADJUST #######
-    dataset = get_data_SAR_TO_NDVI(dataset_path, SAR_channels=4, data_format="numpy")
+    global_min, global_max = compute_global_min_max(dataset_path)
+    transform = GlobalMinMaxScaler(global_min, global_max)
+    dataset = get_data_SAR_TO_NDVI(dataset_path, SAR_channels=4, data_format="numpy", transform=transform)
     if multiple_gpus:
         dataloader = DataLoader(dataset=dataset, batch_size=batch_size, shuffle=False, sampler=DistributedSampler(dataset),drop_last=True)
     else:
         dataloader = DataLoader(dataset=dataset, batch_size=batch_size, shuffle=True, drop_last=True)
-    return dataloader
+    return dataloader, global_min, global_max
 
 def UNet_model_maker(UNet_type, SAR_channels, NDVI_channels, device):
 
@@ -818,7 +829,7 @@ def Diffusion_training(snapshot_folder_path, model_name, snapshot_name,
                                       loss, lr_scheduler, device):
 
     os.makedirs(snapshot_folder_path, exist_ok=True)
-    os.makedirs(os.path.join(os.curdir, 'models_run', model_name, 'results'), exist_ok=True)
+    os.makedirs(os.path.join(os.path.dirname(snapshot_folder_path), 'results'), exist_ok=True)
 
     model = UNet_model_maker(UNet_type, SAR_channels, NDVI_channels, device)
 
@@ -840,8 +851,10 @@ def Diffusion_training(snapshot_folder_path, model_name, snapshot_name,
     encoded_images_val_save_path = os.path.join(dataset_path, "val")
 
     ########## CREATE DATALOADERS FOR THE POST-ENCODING MODEL ##########
-    train_loader = dataloader_POST_encoding_maker(encoded_images_train_save_path, batch_size, multiple_gpus)
-    # val_loader = dataloader_POST_encoding_maker(encoded_images_val_save_path, batch_size, multiple_gpus)
+    train_loader, global_min, global_max = dataloader_POST_encoding_maker(encoded_images_train_save_path, batch_size, multiple_gpus)
+    # val_loader, global_min, global_max = dataloader_POST_encoding_maker(encoded_images_val_save_path, batch_size, multiple_gpus)
+    np.save(os.path.join(os.path.dirname(snapshot_folder_path), "global_min.npy"),global_min)
+    np.save(os.path.join(os.path.dirname(snapshot_folder_path), "global_max.npy"), global_max)
     val_loader = None
     ########## TRAIN DIFFUSION MODEL ##########
     diffusion.train(
@@ -857,7 +870,7 @@ def sampling_test(noise_schedule, snapshot_folder_path, snapshot_name, VAE_weigh
 
     snapshot_path = os.path.join(snapshot_folder_path, snapshot_name)
 
-    vae_model = VAE_model_maker(device)
+    vae_model = VAE_model_maker(device, freeze_vae_params=True)
     model = UNet_model_maker(UNet_type, SAR_channels, NDVI_channels, device)
 
     diffusion = Diffusion(
@@ -876,7 +889,7 @@ def sampling_test(noise_schedule, snapshot_folder_path, snapshot_name, VAE_weigh
         SAR_img = train_dataset[i][0]
         NDVI_img = train_dataset[i][1]
 
-        NDVI_pred_img = diffusion.sample(n=1,model=model, SAR_img=SAR_img, NDVI_channels=NDVI_channels, generate_video=generate_video)
+        NDVI_pred_img = diffusion.sample(n=1,model=model, SAR_img=SAR_img, generate_video=generate_video)
 
         axs[i,0].imshow(SAR_img[0].unsqueeze(0).permute(1,2,0).cpu().numpy())
         axs[i,0].set_title('SAR image')
@@ -976,7 +989,7 @@ def launch(args):
                                       loss=loss, lr_scheduler=lr_scheduler, device=device)
 
     # sampling_test(noise_schedule, snapshot_folder_path, snapshot_name, VAE_weight_path, noise_steps, image_size, ema_smoothing,
-    #                      UNet_type, model_name, generate_video, dataset_path, batch_size, SAR_channels, NDVI_channels, device='cuda')
+    #                      UNet_type, model_name, generate_video, dataset_path, batch_size, SAR_channels=4, NDVI_channels=4, device='cuda')
 
 if __name__ == '__main__':
     import argparse  

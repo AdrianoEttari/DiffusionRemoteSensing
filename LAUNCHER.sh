@@ -22,7 +22,7 @@
 ###### DIFFUSION TRAINING ######
 # dataset_path="celebA_50k_VAE_encoded"
 # dataset_path="up42_sentinel2_patches_VAE_encoded"
-# python train_diffusion_superres.py --VAE_weight_path="$VAE_model_name" --model_name="$model_name" --snapshot_name=snapshot.pt --noise_steps=1000 --ema_smoothing=False --magnification_factor=4 --UNet_type="Residual Cross Attention UNet" --inp_out_channels=4 --batch_size=2 --image_size=256 --multiple_gpus=False --noise_schedule="cosine" --dataset_path="$dataset_path" --lr=1e-3 --epochs=101 --check_preds_epoch=1 --patience=25  --loss="CLIP" --lr_schedule="cosine"
+# python train_diffusion_superres.py --VAE_weight_path="$VAE_model_name" --model_name="$model_name" --snapshot_name=snapshot.pt --noise_steps=1000 --ema_smoothing=False --magnification_factor=4 --UNet_type="Residual Cross Attention UNet" --inp_out_channels=4 --batch_size=2 --image_size=256 --multiple_gpus=False --noise_schedule="cosine" --dataset_path="$dataset_path" --lr=1e-3 --epochs=2000 --check_preds_epoch=1 --patience=25  --loss="CLIP" --lr_schedule="cosine"
 # python train_diffusion_superres.py --model_name="Residual_Attention_UNet_superres_magnification4_LRimgsize64_celeb50k_patches_downblur_StableDiffusion_LRandHR_gradientAccumulation_VAEapart" --snapshot_name=snapshot.pt --noise_steps=1000 --ema_smoothing=False --magnification_factor=4 --UNet_type="Residual Cross Attention UNet" --inp_out_channels=4 --batch_size=32 --image_size=256 --multiple_gpus=False --noise_schedule="cosine" --dataset_path="celebA_50k_VAE_encoded" --lr=1e-3 --epochs=100 --check_preds_epoch=1 --patience=25  --loss="MSE" --lr_schedule="cosine"
 # python train_diffusion_superres.py --model_name="$model_name" --snapshot_name=snapshot.pt --noise_steps=5 --ema_smoothing=False --magnification_factor=4 --inp_out_channels=4 --batch_size=2 --image_size=256 --multiple_gpus=False --noise_schedule="cosine" --dataset_path="$dataset_path" --lr=1e-3 --epochs=100 --check_preds_epoch=1 --patience=25  --loss="MSE" --lr_schedule="cosine"
 
@@ -53,3 +53,8 @@ VAE_model_name="VAE_SAR_TO_NDVI_finetuning_gradientAccumulation.pt"
 ###### DIFFUSION TRAINING ######
 dataset_path="SAR_TO_NDVI_dataset_VAE_encoded"
 python train_diffusion_SAR_TO_NDVI.py --epochs=15 --batch_size=2 --image_size=128 --lr=1e-4 --lr_scheduler="cosine" --check_preds_epoch=10 --noise_schedule="cosine" --snapshot_name=snapshot.pt --model_name="$model_name" --noise_steps=10 --patience=25 --dataset_path="$dataset_path" --generate_video=False --loss="CLIP" --UNet_type="Residual Cross Attention UNet" --multiple_gpus=False --ema_smoothing=False --VAE_weight_path="$VAE_model_name" --freeze_vae_params=False
+
+
+####### SAMPLING #######
+# dataset_path="SAR_TO_NDVI_dataset"
+# python train_diffusion_SAR_TO_NDVI.py --noise_schedule="cosine" --snapshot_name="snapshot.pt" --VAE_weight_path="$VAE_model_name" --noise_steps=1000 --image_size=128 --ema_smoothing=False --UNet_type="Residual Cross Attention UNet" --model_name="$model_name" --generate_video=False --dataset_path="$dataset_path" --batch_size=16

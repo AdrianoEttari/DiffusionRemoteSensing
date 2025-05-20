@@ -230,8 +230,21 @@ class Diffusion:
         if generate_video:
             video_maker(frames, os.path.join(os.getcwd(), 'models_run', self.model_name, 'results', 'video_denoising.mp4'), 100)
             del frames
+        
+        # import ipdb; ipdb.set_trace() ############ DEBUG ##########
+        global_min = float(np.load(os.path.join(os.path.dirname(os.path.dirname(self.snapshot_path)), "global_min.npy")))
+        global_max = float(np.load(os.path.join(os.path.dirname(os.path.dirname(self.snapshot_path)), "global_max.npy")))
+        x = (x+1)*(global_max-global_min)/2 +global_min
 
+        # (scaled+1)*(x.max-x.min)/2 +x.min() = x
+        # (np.float32(-16.640661), np.float32(13.159316))
         latent_img = x / SCALE
+
+
+        
+        # img = transforms.ToTensor()(np.load(os.path.join("..","102flowers_dataset_VAE_encoded","0","0c0844c32abd409d83c266df1a0a8772.npy"))).unsqueeze(0).to('cuda') / SCALE ############ DEBUG ##########
+        # fig, axs = plt.subplots(2,2); axs = axs.ravel(); axs[0].imshow(latent_img[0].permute(1,2,0).detach().cpu()); axs[1].imshow(img[0].permute(1,2,0).detach().cpu()); axs[2].hist(latent_img.ravel().detach().cpu()); axs[3].hist(img[0].ravel().detach().cpu()); plt.show()  ############ DEBUG ##########
+
 
         # Delete unnecessary tensors to remove references
         del x, predicted_noise, noise  
@@ -241,11 +254,15 @@ class Diffusion:
 
         # Free unused GPU memory
         torch.cuda.empty_cache()
-
+        self.vae_model.eval()
         # Perform inference without gradient tracking to save VRAM
         with torch.no_grad():
             generated_image = self.vae_model.decode(latent_img).sample
-            
+
+            # generated_img_2 = self.vae_model.decode(img).sample ############ DEBUG ##########
+        # fig, axs = plt.subplots(2,2); axs = axs.ravel(); axs[0].imshow(generated_image[0].permute(1,2,0).detach().cpu()); axs[1].imshow(generated_img_2[0].permute(1,2,0).detach().cpu()); axs[2].hist(generated_image[0].ravel().detach().cpu()); axs[3].hist(generated_img_2.ravel().detach().cpu()); plt.show() ############ DEBUG ##########
+
+
         model.train() # enables dropout and batch normalization
         return generated_image
 
@@ -615,6 +632,7 @@ class Diffusion:
         
         plt.savefig(os.path.join('..', 'models_run', self.model_name, 'results', f'generation_{epoch}_epoch.png'))
 
+
 class vae_loss(nn.Module):
     def __init__(self, device):
         super(vae_loss, self).__init__()
@@ -637,7 +655,6 @@ def dataloader_PRE_encoding_maker(dataset_path, image_size, batch_size, multiple
         image_size = 32
     else:
         train_dataset = dataset_maker(image_size, dataset_path)
-
     if multiple_gpus:
         train_loader = DataLoader(dataset=train_dataset, batch_size=batch_size, shuffle=False, sampler=DistributedSampler(train_dataset, shuffle=True))
     else:
@@ -649,14 +666,14 @@ def dataloader_PRE_encoding_maker(dataset_path, image_size, batch_size, multiple
 
 def dataloader_POST_encoding_maker(dataset_path, batch_size, multiple_gpus):
     global_min, global_max = compute_global_min_max(dataset_path)
-    transform = GlobalMinMaxScaler(global_min, global_max)
+    transform = GlobalMinMaxScaler(global_min, global_max) # it scaled the images in the range [-1,1] because the diffusion model operates better with this range of values.
     dataset = NPYFolderDataset(dataset_path, transform=transform)
     num_classes = len(dataset.classes)
     if multiple_gpus:
         dataloader = DataLoader(dataset=dataset, batch_size=batch_size, shuffle=False, sampler=DistributedSampler(dataset),drop_last=True)
     else:
         dataloader = DataLoader(dataset=dataset, batch_size=batch_size, shuffle=True, drop_last=True)
-    return dataloader, num_classes
+    return dataloader, num_classes, global_min, global_max
 
 def VAE_model_maker(device):
     vae_model_path = "CompVis/stable-diffusion-v1-4"
@@ -731,15 +748,19 @@ def generation_sampling(noise_schedule, snapshot_folder_path, snapshot_name, VAE
         device=device, image_size=image_size, model_name=model_name,
         multiple_gpus=False, ema_smoothing=ema_smoothing)
 
-    num_imgs_per_class = 3
-    fig, axs = plt.subplots(num_rows_plot,num_imgs_per_class, figsize=(15,15))
-    for i in range(num_rows_plot):
-        prediction = diffusion.sample(n=num_imgs_per_class,model=model, target_class=torch.tensor([i], dtype=torch.int64).to(device), generate_video=generate_video)
-        for j in range(num_imgs_per_class):
-            axs[i,j].imshow(prediction[j].permute(1,2,0).cpu().numpy())
-            axs[i,j].set_title(f'Class {i}')
+    # num_imgs_per_class = 3
+    # fig, axs = plt.subplots(num_rows_plot,num_imgs_per_class, figsize=(15,15))
+    # for i in range(num_rows_plot):
+    #     prediction = diffusion.sample(n=num_imgs_per_class,model=model, target_class=torch.tensor([i], dtype=torch.int64).to(device), generate_video=generate_video)
+    #     for j in range(num_imgs_per_class):
+    #         axs[i,j].imshow(prediction[j].permute(1,2,0).cpu().numpy())
+    #         axs[i,j].set_title(f'Class {i}')
 
-    plt.savefig(os.path.join('..', 'models_run', model_name, 'results', f'generation_results.png'))
+    # plt.savefig(os.path.join('..', 'models_run', model_name, 'results', f'generation_results.png'))
+
+    prediction = diffusion.sample(n=1,model=model, target_class=torch.tensor([0], dtype=torch.int64).to(device), generate_video=generate_video) #########  DEBUG #########
+    plt.imshow(prediction[0].permute(1,2,0).detach().cpu())#########  DEBUG #########
+    plt.savefig(os.path.join('..', 'models_run', model_name, 'results', f'generation_ATTEMPT.png'))#########  DEBUG #########
 
 def Diffusion_training(snapshot_folder_path, model_name, snapshot_name,
                         noise_steps, ema_smoothing,  
@@ -750,13 +771,14 @@ def Diffusion_training(snapshot_folder_path, model_name, snapshot_name,
                                       loss, lr_scheduler, device):
 
     os.makedirs(snapshot_folder_path, exist_ok=True)
-    os.makedirs(os.path.join('..', 'models_run', model_name, 'results'), exist_ok=True)
+    os.makedirs(os.path.join(os.path.dirname(snapshot_folder_path),"results"), exist_ok=True)
 
     ########## CREATE DATALOADERS FOR THE POST-ENCODING MODEL ##########
     encoded_images_train_save_path = os.path.join(dataset_path)
-    train_loader, num_classes = dataloader_POST_encoding_maker(dataset_path=encoded_images_train_save_path, batch_size=batch_size, multiple_gpus=multiple_gpus)
+    train_loader, num_classes, global_min, global_max = dataloader_POST_encoding_maker(dataset_path=encoded_images_train_save_path, batch_size=batch_size, multiple_gpus=multiple_gpus)
     val_loader = None
-
+    np.save(os.path.join(os.path.dirname(snapshot_folder_path), "global_min.npy"),global_min)
+    np.save(os.path.join(os.path.dirname(snapshot_folder_path), "global_max.npy"), global_max)
     model = UNet_model_maker(UNet_type, input_channels, output_channels, num_classes, device)
 
     if multiple_gpus:

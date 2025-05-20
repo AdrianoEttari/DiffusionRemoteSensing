@@ -311,8 +311,9 @@ dataset_path = os.path.join("102flowers_dataset")
 dataset = dataset_maker(image_size, dataset_path)
 
 flower_0_img = dataset[100][0].unsqueeze(0).to(device)
-encoded_img = vae_model.encode(flower_0_img).latent_dist.sample()
-decoded_img = vae_model.decode(encoded_img).sample
+with torch.no_grad():
+    encoded_img = vae_model.encode(flower_0_img).latent_dist.sample()
+    decoded_img = vae_model.decode(encoded_img).sample
 
 fig, axs = plt.subplots(1,3)
 axs = axs.ravel()
@@ -430,10 +431,9 @@ _load_snapshot_VAE(snapshot_path, vae_model)
 
 img = Image.open(os.path.join('up42_sentinel2_patches','test_original','patch_256_1792.png'))
 img = transform(img).unsqueeze(0).to(device)
-encoded_img = vae_model.encode(img).latent_dist.sample()
-decoded_img = vae_model.decode(encoded_img).sample
-
-
+with torch.no_grad():
+    encoded_img = vae_model.encode(img).latent_dist.sample()
+    decoded_img = vae_model.decode(encoded_img).sample
 
 fig, axs = plt.subplots(1,3, figsize=(10,5))
 axs = axs.ravel()
@@ -787,4 +787,73 @@ axs[4].set_title('SR(bicubic)')
 axs[5].imshow(sr_SwinIR)
 axs[5].set_title('SR(SwinIR)')
 plt.show()
+# %% TO REMOVE
+from generate_new_imgs.utils import dataset_maker, NPYFolderDataset
+from generate_new_imgs.UNet_model_generation_CrossAttention import Residual_Attention_UNet_generation
+import os
+import matplotlib.pyplot as plt
+import torch
+from torchvision import transforms
+from torch.utils.data import DataLoader
+from diffusers import StableDiffusionPipeline
+from PIL import Image
+import numpy as np
+from torch import nn
+
+def VAE_model_maker(device):
+    vae_model_path = "CompVis/stable-diffusion-v1-4"
+    pipe = StableDiffusionPipeline.from_pretrained(vae_model_path)
+    vae_model = pipe.vae.to(device)
+    return vae_model
+
+def _load_snapshot_VAE(snapshot_path, model):
+    '''
+    This function loads the model state and the last epoch of training (so that we can restart the
+    training at this point instead of restarting from 0) from a snapshot.
+    It is a mandatory function in order to be fault tolerant. The reason is that if the training is interrupted, we can resume
+    it from the last snapshot.
+    '''
+    snapshot = torch.load(snapshot_path, map_location=device, weights_only=True)
+    model.load_state_dict(snapshot)
+
+    print(f"Snapshot loaded from {snapshot_path}")
+
+device='cuda'
+snapshot_path = os.path.join('models_run','VAE_102flowers_finetuning_gradientAccumulation.pt')
+vae_model = VAE_model_maker(device=device)
+vae_model.eval()
+vae_model = vae_model.to(device)
+_load_snapshot_VAE(snapshot_path, vae_model)
+
+image_size = 512
+dataset_original_path = os.path.join("102flowers_dataset")
+dataset_original = dataset_maker(image_size, dataset_original_path)
+dataset_encoded_path = os.path.join("102flowers_dataset_VAE_encoded")
+dataset_encoded = NPYFolderDataset(dataset_encoded_path)
+
+for original_img_tuple, encoded_img_tuple in zip(dataset_original.samples, dataset_encoded.samples):
+    if original_img_tuple[1] == 0:
+        original_img = transforms.ToTensor()(Image.open(original_img_tuple[0])).unsqueeze(0).to('cuda')
+        encoded_img = transforms.ToTensor()(np.load(encoded_img_tuple[0])).unsqueeze(0).to('cuda')/0.18215
+
+        with torch.no_grad():
+            encoded_original_img = vae_model.encode(original_img).latent_dist.sample()
+            decoded_original_img = vae_model.decode(encoded_original_img).sample
+            decoded_encoded_img = vae_model.decode(encoded_img).sample
+        break
+        fig, axs = plt.subplots(2,5, figsize=(10,10))
+        axs = axs.ravel()
+
+        axs[0].imshow(original_img[0].permute(1,2,0).detach().cpu())
+        axs[1].imshow(encoded_img[0].permute(1,2,0).detach().cpu())
+        axs[2].imshow(encoded_original_img[0].permute(1,2,0).detach().cpu())
+        axs[3].imshow(decoded_original_img[0].permute(1,2,0).detach().cpu())
+        axs[4].imshow(decoded_encoded_img[0].permute(1,2,0).detach().cpu())
+        axs[5].hist(original_img.ravel().cpu())
+        axs[6].hist(encoded_img.ravel().cpu())
+        axs[7].hist(encoded_original_img.ravel().cpu())
+        axs[8].hist(decoded_original_img.ravel().cpu())
+        axs[9].hist(decoded_encoded_img.ravel().cpu())
+        plt.show()
+        break
 # %%

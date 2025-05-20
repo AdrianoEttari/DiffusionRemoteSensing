@@ -5,8 +5,9 @@ import torch.nn as nn
 from torchvision import transforms, models
 from tqdm import tqdm
 from torch.utils.data import DataLoader
-from utils import get_data_superres, get_data_superres_BSRGAN, get_data_superres_PLAIN, video_maker, CosineAnnealingWarmupRestarts
+from utils import get_data_superres, get_data_superres_BSRGAN, get_data_superres_PLAIN, video_maker, CosineAnnealingWarmupRestarts, compute_global_min_max, GlobalMinMaxScaler
 import copy
+import numpy as np
 
 from UNet_model_superres_CrossAttention import Residual_CrossAttention_UNet_superres, EMA
 
@@ -256,6 +257,10 @@ class Diffusion:
             video_maker(frames, os.path.join(os.getcwd(), 'models_run', self.model_name, 'results', 'video_denoising.mp4'), 100)
             del frames
 
+        global_min = float(np.load(os.path.join(os.path.dirname(os.path.dirname(self.snapshot_path)), "global_min.npy")))
+        global_max = float(np.load(os.path.join(os.path.dirname(os.path.dirname(self.snapshot_path)), "global_max.npy")))
+        
+        x = (x+1)*(global_max-global_min)/2 +global_min
         latent_sr_img = x / SCALE
         latent_lr_img = lr_img / SCALE
 
@@ -816,12 +821,14 @@ def dataloader_PRE_encoding_maker(dataset_path, Degradation_type, image_size, ma
     return train_loader, val_loader
 
 def dataloader_POST_encoding_maker(dataset_path, batch_size, multiple_gpus):
-    dataset = get_data_superres_PLAIN(dataset_path)
+    global_min, global_max = compute_global_min_max(dataset_path)
+    transform = GlobalMinMaxScaler(global_min, global_max) # it scaled the images in the range [-1,1] because the diffusion model operates better with this range of values.
+    dataset = get_data_superres_PLAIN(dataset_path, transform)
     if multiple_gpus:
         dataloader = DataLoader(dataset=dataset, batch_size=batch_size, shuffle=False, sampler=DistributedSampler(dataset),drop_last=True)
     else:
         dataloader = DataLoader(dataset=dataset, batch_size=batch_size, shuffle=True, drop_last=True)
-    return dataloader
+    return dataloader, global_min, global_max
 
 def UNet_model_maker(UNet_type, input_channels, output_channels, device, image_size):
     if UNet_type.lower() == 'residual attention unet':
@@ -902,7 +909,7 @@ def Diffusion_training(snapshot_folder_path, model_name, snapshot_name,
                                       loss, lr_scheduler, device, VAE_weight_path):
 
     os.makedirs(snapshot_folder_path, exist_ok=True)
-    os.makedirs(os.path.join(os.curdir, 'models_run', model_name, 'results'), exist_ok=True)
+    os.makedirs(os.path.join(os.path.dirname(snapshot_folder_path), 'results'), exist_ok=True)
 
     model = UNet_model_maker(UNet_type, input_channels, output_channels, device, image_size)
     print("Num params: ", sum(p.numel() for p in model.parameters()))
@@ -935,8 +942,10 @@ def Diffusion_training(snapshot_folder_path, model_name, snapshot_name,
     encoded_images_val_save_path = os.path.join(dataset_path, "val_original")
 
     ########## CREATE DATALOADERS FOR THE POST-ENCODING MODEL ##########
-    train_loader = dataloader_POST_encoding_maker(encoded_images_train_save_path, batch_size, multiple_gpus)
-    # val_loader = dataloader_POST_encoding_maker(encoded_images_val_save_path, batch_size, multiple_gpus)
+    train_loader, global_min, global_max = dataloader_POST_encoding_maker(encoded_images_train_save_path, batch_size, multiple_gpus)
+    # val_loader, global_min, global_max = dataloader_POST_encoding_maker(encoded_images_val_save_path, batch_size, multiple_gpus)
+    np.save(os.path.join(os.path.dirname(snapshot_folder_path), "global_min.npy"),global_min)
+    np.save(os.path.join(os.path.dirname(snapshot_folder_path), "global_max.npy"), global_max)
     val_loader = None
     ########## TRAIN DIFFUSION MODEL ##########
     diffusion.train(
