@@ -570,10 +570,10 @@ class Diffusion:
                     if val_loader is None: # if there is no validation loader, then we save the weights at the frequency check_preds_epoch
                         if self.ema_smoothing:
                             self._save_snapshot(epoch, ema_model)
-                            self.prediction_plot(ema_model, train_loader, epoch)
+                            # self.prediction_plot(ema_model, train_loader, epoch)
                         else:
                             self._save_snapshot(epoch, model)
-                            self.prediction_plot(model, train_loader, epoch)
+                            # self.prediction_plot(model, train_loader, epoch)
 
             if val_loader is not None:
                 with torch.no_grad():
@@ -979,17 +979,17 @@ def launch(args):
     
     # SAR images have 2 channels (VV and VH) and the NDVI image 1 channel. The VAE model we use need 3 channels in input. In order to make just few adjustments we use just the
     # first SAR channels (i.e. VV), and  we add a Conv2d layer that will convert the 1 channel of SAR and NDVI to 3 channels. So, SAR_channels=NDVI_channels=1.
-    Diffusion_training(snapshot_folder_path=snapshot_folder_path, model_name=model_name, snapshot_name=snapshot_name,
-                        noise_steps=noise_steps, ema_smoothing=ema_smoothing,
-                            UNet_type=UNet_type, SAR_channels=4, NDVI_channels=4, 
-                            VAE_weight_path=VAE_weight_path,
-                                batch_size=batch_size, image_size=image_size, multiple_gpus=multiple_gpus, 
-                                    noise_schedule=noise_schedule, dataset_path=dataset_path, lr=lr,
-                                     epochs=epochs, check_preds_epoch=check_preds_epoch, patience=patience,
-                                      loss=loss, lr_scheduler=lr_scheduler, device=device)
+    # Diffusion_training(snapshot_folder_path=snapshot_folder_path, model_name=model_name, snapshot_name=snapshot_name,
+    #                     noise_steps=noise_steps, ema_smoothing=ema_smoothing,
+    #                         UNet_type=UNet_type, SAR_channels=4, NDVI_channels=4, 
+    #                         VAE_weight_path=VAE_weight_path,
+    #                             batch_size=batch_size, image_size=image_size, multiple_gpus=multiple_gpus, 
+    #                                 noise_schedule=noise_schedule, dataset_path=dataset_path, lr=lr,
+    #                                  epochs=epochs, check_preds_epoch=check_preds_epoch, patience=patience,
+    #                                   loss=loss, lr_scheduler=lr_scheduler, device=device)
 
-    # sampling_test(noise_schedule, snapshot_folder_path, snapshot_name, VAE_weight_path, noise_steps, image_size, ema_smoothing,
-    #                      UNet_type, model_name, generate_video, dataset_path, batch_size, SAR_channels=4, NDVI_channels=4, device='cuda')
+    sampling_test(noise_schedule, snapshot_folder_path, snapshot_name, VAE_weight_path, noise_steps, image_size, ema_smoothing,
+                         UNet_type, model_name, generate_video, dataset_path, batch_size, SAR_channels=4, NDVI_channels=4, device='cuda')
 
 if __name__ == '__main__':
     import argparse  

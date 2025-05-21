@@ -144,7 +144,7 @@ class get_data_superres(Dataset):
             y = to_pil(y)
 
         # Check if images are uint8 and in 0-255 range
-        if not (y.dtype == np.uint8 and y.min() >= 0 and y.max() <= 255):
+        if not (np.array(y).dtype == np.uint8 and np.array(y).min() >= 0 and np.array(y).max() <= 255):
             raise ValueError(f"The images are not uint8 or are not ranged [0,255]. This makes the normalization invalid.")
         
         if self.transform:

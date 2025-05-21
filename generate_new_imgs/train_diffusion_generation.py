@@ -748,19 +748,21 @@ def generation_sampling(noise_schedule, snapshot_folder_path, snapshot_name, VAE
         device=device, image_size=image_size, model_name=model_name,
         multiple_gpus=False, ema_smoothing=ema_smoothing)
 
-    # num_imgs_per_class = 3
-    # fig, axs = plt.subplots(num_rows_plot,num_imgs_per_class, figsize=(15,15))
-    # for i in range(num_rows_plot):
-    #     prediction = diffusion.sample(n=num_imgs_per_class,model=model, target_class=torch.tensor([i], dtype=torch.int64).to(device), generate_video=generate_video)
-    #     for j in range(num_imgs_per_class):
-    #         axs[i,j].imshow(prediction[j].permute(1,2,0).cpu().numpy())
-    #         axs[i,j].set_title(f'Class {i}')
-
-    # plt.savefig(os.path.join('..', 'models_run', model_name, 'results', f'generation_results.png'))
-
     prediction = diffusion.sample(n=1,model=model, target_class=torch.tensor([0], dtype=torch.int64).to(device), generate_video=generate_video) #########  DEBUG #########
     plt.imshow(prediction[0].permute(1,2,0).detach().cpu())#########  DEBUG #########
     plt.savefig(os.path.join('..', 'models_run', model_name, 'results', f'generation_ATTEMPT.png'))#########  DEBUG #########
+
+    num_imgs_per_class = 3
+    fig, axs = plt.subplots(num_rows_plot,num_imgs_per_class, figsize=(15,15))
+    for i in range(num_rows_plot):
+        prediction = diffusion.sample(n=num_imgs_per_class,model=model, target_class=torch.tensor([i], dtype=torch.int64).to(device), generate_video=generate_video)
+        for j in range(num_imgs_per_class):
+            axs[i,j].imshow(prediction[j].permute(1,2,0).cpu().numpy())
+            axs[i,j].set_title(f'Class {i}')
+
+    plt.savefig(os.path.join('..', 'models_run', model_name, 'results', f'generation_results.png'))
+
+
 
 def Diffusion_training(snapshot_folder_path, model_name, snapshot_name,
                         noise_steps, ema_smoothing,  
@@ -878,16 +880,16 @@ def launch(args):
     #                     batch_size=batch_size, multiple_gpus=multiple_gpus, 
     #                         VAE_weight_path=VAE_weight_path, device=device)
 
-    Diffusion_training(snapshot_folder_path=snapshot_folder_path, model_name=model_name, snapshot_name=snapshot_name,
-                        noise_steps=noise_steps, ema_smoothing=ema_smoothing,
-                            UNet_type=UNet_type, input_channels=input_channels, output_channels=output_channels, 
-                                batch_size=batch_size, image_size=image_size, multiple_gpus=multiple_gpus, 
-                                    noise_schedule=noise_schedule, dataset_path=dataset_path, lr=lr,
-                                     epochs=epochs,check_preds_epoch=check_preds_epoch, patience=patience,
-                                      loss=loss, lr_scheduler=lr_scheduler, device=device)
+    # Diffusion_training(snapshot_folder_path=snapshot_folder_path, model_name=model_name, snapshot_name=snapshot_name,
+    #                     noise_steps=noise_steps, ema_smoothing=ema_smoothing,
+    #                         UNet_type=UNet_type, input_channels=input_channels, output_channels=output_channels, 
+    #                             batch_size=batch_size, image_size=image_size, multiple_gpus=multiple_gpus, 
+    #                                 noise_schedule=noise_schedule, dataset_path=dataset_path, lr=lr,
+    #                                  epochs=epochs,check_preds_epoch=check_preds_epoch, patience=patience,
+    #                                   loss=loss, lr_scheduler=lr_scheduler, device=device)
     
-    # generation_sampling(noise_schedule, snapshot_folder_path, snapshot_name, VAE_weight_path, noise_steps, image_size, ema_smoothing,
-    #                      UNet_type, model_name, generate_video, input_channels=4, output_channels=4, num_classes=num_classes, device='cuda')
+    generation_sampling(noise_schedule, snapshot_folder_path, snapshot_name, VAE_weight_path, noise_steps, image_size, ema_smoothing,
+                         UNet_type, model_name, generate_video, input_channels=4, output_channels=4, num_classes=num_classes, device='cuda')
 
 
 if __name__ == '__main__':
