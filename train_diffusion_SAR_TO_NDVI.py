@@ -5,7 +5,7 @@ import torch.nn as nn
 from tqdm import tqdm
 from torch.utils.data import DataLoader
 from torchvision import transforms, models
-from utils import get_data_SAR_TO_NDVI, video_maker, CosineAnnealingWarmupRestarts, compute_global_min_max, GlobalMinMaxScaler
+from utils import get_data_SAR_TO_NDVI, video_maker, CosineAnnealingWarmupRestarts, compute_global_min_max
 import copy
 import numpy as np
 from UNet_model_SAR_TO_NDVI_CrossAttention import Residual_CrossAttention_UNet_SAR_TO_NDVI, EMA
@@ -237,11 +237,11 @@ class Diffusion:
             video_maker(frames, os.path.join(os.getcwd(), 'models_run', self.model_name, 'results', 'video_denoising.mp4'), 100)
             del frames
 
-        global_min = float(np.load(os.path.join(os.path.dirname(os.path.dirname(self.snapshot_path)), "global_min.npy")))
-        global_max = float(np.load(os.path.join(os.path.dirname(os.path.dirname(self.snapshot_path)), "global_max.npy")))
-        
-        x = (x+1)*(global_max-global_min)/2 +global_min
+        global_min_opt = float(torch.load(os.path.join(os.path.dirname(os.path.dirname(self.snapshot_path)), "min_opt.pt")))
+        global_max_opt = float(torch.load(os.path.join(os.path.dirname(os.path.dirname(self.snapshot_path)), "max_opt.pt")))
 
+        x = (x+1)*(global_max_opt-global_min_opt)/2 + global_min_opt
+    
         latent_NDVI_img = x
         latent_SAR_img = SAR_img
 
@@ -429,16 +429,16 @@ class Diffusion:
         vae.eval()
         return vae
     
-    def encoded_dataset_VAE(self, dataloader, save_path):
+    def encoded_dataset_VAE(self, dataloader, save_path, min_max_path):
             import numpy as np
-
+            
             self.vae_model.eval()
             os.makedirs(os.path.join(save_path, "sar"), exist_ok=True)
             os.makedirs(os.path.join(save_path, "opt"), exist_ok=True)
-            pbar_dataloader = tqdm(dataloader, desc='Encoding dataset', position=0)
-            for i,(SAR_img,NDVI_img) in enumerate(pbar_dataloader):
-                SAR_img = SAR_img.to(self.device)
-                NDVI_img = NDVI_img.to(self.device)
+            dataset = dataloader.dataset
+            for SAR_img,NDVI_img in tqdm(dataset, desc="Encoding..."):
+                SAR_img = SAR_img.unsqueeze(0).to(self.device)
+                NDVI_img = NDVI_img.unsqueeze(0).to(self.device)
                 if self.multiple_gpus:
                     SAR_img = self.vae_model.module.encode(SAR_img)
                     NDVI_img = self.vae_model.module.encode(NDVI_img)
@@ -446,12 +446,34 @@ class Diffusion:
                     SAR_img = self.vae_model.encode(SAR_img) 
                     NDVI_img = self.vae_model.encode(NDVI_img)
 
-                for idx in range(SAR_img.shape[0]):
-                    unique_id = uuid.uuid4().hex
-                    SAR_img_to_save = SAR_img[idx].permute(1,2,0).detach().cpu().numpy()
-                    NDVI_img_to_save = NDVI_img[idx].permute(1,2,0).detach().cpu().numpy()
-                    np.save(os.path.join(save_path, "sar",  f'{unique_id}'), SAR_img_to_save)
-                    np.save(os.path.join(save_path, "opt",  f'{unique_id}'), NDVI_img_to_save)
+                unique_id = uuid.uuid4().hex
+                torch.save(SAR_img, os.path.join(save_path, "sar",  f"{unique_id}"+".pt"))
+                torch.save(NDVI_img, os.path.join(save_path, "opt",  f"{unique_id}"+".pt"))
+            
+            if "train" in save_path and not os.path.exists(os.path.join(min_max_path, "min_sar.pt")):
+                global_min_sar, global_max_sar = compute_global_min_max(os.path.join(save_path, "sar"))
+                global_min_opt, global_max_opt = compute_global_min_max(os.path.join(save_path, "opt"))
+                torch.save(global_min_sar, os.path.join(min_max_path, "min_sar.pt"))
+                torch.save(global_max_sar, os.path.join(min_max_path, "max_sar.pt"))
+                torch.save(global_min_opt, os.path.join(min_max_path, "min_opt.pt"))
+                torch.save(global_max_opt, os.path.join(min_max_path, "max_opt.pt"))
+            else:
+                global_min_sar = torch.load(os.path.join(min_max_path, "min_sar.pt"))
+                global_max_sar = torch.load(os.path.join(min_max_path, "max_sar.pt"))
+                global_min_opt = torch.load(os.path.join(min_max_path, "min_opt.pt"))
+                global_max_opt = torch.load(os.path.join(min_max_path, "max_opt.pt"))
+
+            for img_type in ["sar", "opt"]:
+                img_type_path = os.path.join(save_path, img_type) 
+                for img_name in tqdm(os.listdir(img_type_path), desc="Standardizing..."):
+                    img_path = os.path.join(img_type_path, img_name)
+                    img = torch.load(img_path).to(self.device)
+                    if img_type == "sar":
+                        img = 2*(img-global_min_sar)/(global_max_sar-global_min_sar)-1
+                    elif img_type == "opt":
+                        img = 2*(img-global_min_opt)/(global_max_opt-global_min_opt)-1
+                    os.remove(os.path.join(img_path))
+                    torch.save(img[0], os.path.join(img_path))
 
     def train(self, lr, epochs, check_preds_epoch, train_loader, val_loader, patience, loss, lr_scheduler=None):
         '''
@@ -524,7 +546,6 @@ class Diffusion:
             for i,(SAR_img,NDVI_img) in enumerate(pbar_train):
                 SAR_img = SAR_img.to(self.device)
                 NDVI_img = NDVI_img.to(self.device)
-                
                 t = self.sample_timesteps(NDVI_img.shape[0]).to(self.device)
                 # t is a unidimensional tensor of shape (NDVI_img.shape[0] that is the batch_size) with random integers from 1 to noise_steps.
                 x_t, noise = self.noise_images(NDVI_img, t) # get the noisy images
@@ -748,14 +769,15 @@ def dataloader_PRE_encoding_maker(dataset_path, batch_size, multiple_gpus):
     return train_loader, val_loader
 
 def dataloader_POST_encoding_maker(dataset_path, batch_size, multiple_gpus):
-    global_min, global_max = compute_global_min_max(dataset_path)
-    transform = GlobalMinMaxScaler(global_min, global_max)
-    dataset = get_data_SAR_TO_NDVI(dataset_path, SAR_channels=4, data_format="numpy", transform=transform)
+    # global_min, global_max = compute_global_min_max(dataset_path)
+    # transform = GlobalMinMaxScaler(global_min, global_max)
+    dataset = get_data_SAR_TO_NDVI(dataset_path, SAR_channels=4, data_format="torch", transform=None)
     if multiple_gpus:
         dataloader = DataLoader(dataset=dataset, batch_size=batch_size, shuffle=False, sampler=DistributedSampler(dataset),drop_last=True)
     else:
         dataloader = DataLoader(dataset=dataset, batch_size=batch_size, shuffle=True, drop_last=True)
-    return dataloader, global_min, global_max
+    # return dataloader, global_min, global_max
+    return dataloader
 
 def UNet_model_maker(UNet_type, SAR_channels, NDVI_channels, device):
 
@@ -783,7 +805,7 @@ def VAE_model_maker(device, freeze_vae_params):
     vae_model = VAE_model_wrapped(vae_model, in_channels=1, freeze_vae_params=freeze_vae_params).to(device)
     return vae_model
 
-def VAE_finetuning(dataset_path, image_size, batch_size, multiple_gpus, VAE_weight_path, device, freeze_vae_params):
+def VAE_finetuning(dataset_path, image_size, batch_size, multiple_gpus, VAE_weight_path, min_max_path, device, freeze_vae_params):
     train_loader, val_loader = dataloader_PRE_encoding_maker(dataset_path=dataset_path, batch_size=batch_size, multiple_gpus=multiple_gpus)
     vae_model = VAE_model_maker(device, freeze_vae_params)
         
@@ -808,11 +830,11 @@ def VAE_finetuning(dataset_path, image_size, batch_size, multiple_gpus, VAE_weig
         encoded_images_val_save_path = os.path.join(dataset_path+'_VAE_encoded', "val")
         if os.path.exists(os.path.join(encoded_images_train_save_path, 'img')):
             if len(os.listdir(os.path.join(encoded_images_train_save_path, 'img'))) == 0:
-                diffusion.encoded_dataset_VAE(dataloader=train_loader, save_path=encoded_images_train_save_path)
-                diffusion.encoded_dataset_VAE(dataloader=val_loader, save_path=encoded_images_val_save_path)
+                diffusion.encoded_dataset_VAE(dataloader=train_loader, save_path=encoded_images_train_save_path, min_max_path=min_max_path)
+                diffusion.encoded_dataset_VAE(dataloader=val_loader, save_path=encoded_images_val_save_path, min_max_path=min_max_path)
         else:
-            diffusion.encoded_dataset_VAE(dataloader=train_loader, save_path=encoded_images_train_save_path)
-            diffusion.encoded_dataset_VAE(dataloader=val_loader, save_path=encoded_images_val_save_path)
+            diffusion.encoded_dataset_VAE(dataloader=train_loader, save_path=encoded_images_train_save_path, min_max_path=min_max_path)
+            diffusion.encoded_dataset_VAE(dataloader=val_loader, save_path=encoded_images_val_save_path, min_max_path=min_max_path)
 
         ########## RENAME IMAGES (OPTIONAL) ##########
         # for set_path in [encoded_images_train_save_path, encoded_images_val_save_path]:
@@ -851,10 +873,8 @@ def Diffusion_training(snapshot_folder_path, model_name, snapshot_name,
     encoded_images_val_save_path = os.path.join(dataset_path, "val")
 
     ########## CREATE DATALOADERS FOR THE POST-ENCODING MODEL ##########
-    train_loader, global_min, global_max = dataloader_POST_encoding_maker(encoded_images_train_save_path, batch_size, multiple_gpus)
-    # val_loader, global_min, global_max = dataloader_POST_encoding_maker(encoded_images_val_save_path, batch_size, multiple_gpus)
-    np.save(os.path.join(os.path.dirname(snapshot_folder_path), "global_min.npy"),global_min)
-    np.save(os.path.join(os.path.dirname(snapshot_folder_path), "global_max.npy"), global_max)
+    train_loader = dataloader_POST_encoding_maker(encoded_images_train_save_path, batch_size, multiple_gpus)
+    # val_loader = dataloader_POST_encoding_maker(encoded_images_val_save_path, batch_size, multiple_gpus)
     val_loader = None
     ########## TRAIN DIFFUSION MODEL ##########
     diffusion.train(
@@ -962,7 +982,7 @@ def launch(args):
         print(f'Using {lr_scheduler} learning rate scheduler')
 
     os.makedirs(snapshot_folder_path, exist_ok=True)
-    os.makedirs(os.path.join(os.curdir, 'models_run', model_name, 'results'), exist_ok=True)
+    os.makedirs(os.path.join(os.path.dirname(snapshot_folder_path), 'results'), exist_ok=True)
     
     if multiple_gpus:
         print('Using multiple GPUs')
@@ -973,9 +993,11 @@ def launch(args):
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         print('Using single GPU')
 
+    min_max_path = os.path.dirname(snapshot_folder_path)
+
     # VAE_finetuning(dataset_path=dataset_path, image_size=image_size,
     #                 batch_size=batch_size, multiple_gpus=multiple_gpus, 
-    #                     VAE_weight_path=VAE_weight_path, device=device, freeze_vae_params=freeze_vae_params)
+    #                     VAE_weight_path=VAE_weight_path, min_max_path=min_max_path, device=device, freeze_vae_params=freeze_vae_params)
     
     # SAR images have 2 channels (VV and VH) and the NDVI image 1 channel. The VAE model we use need 3 channels in input. In order to make just few adjustments we use just the
     # first SAR channels (i.e. VV), and  we add a Conv2d layer that will convert the 1 channel of SAR and NDVI to 3 channels. So, SAR_channels=NDVI_channels=1.

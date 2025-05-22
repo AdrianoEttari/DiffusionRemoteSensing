@@ -762,8 +762,6 @@ def generation_sampling(noise_schedule, snapshot_folder_path, snapshot_name, VAE
 
     plt.savefig(os.path.join('..', 'models_run', model_name, 'results', f'generation_results.png'))
 
-
-
 def Diffusion_training(snapshot_folder_path, model_name, snapshot_name,
                         noise_steps, ema_smoothing,  
                             UNet_type, input_channels, output_channels, 

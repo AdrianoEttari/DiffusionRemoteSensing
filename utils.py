@@ -14,6 +14,7 @@ import cv2
 from torch.optim.lr_scheduler import _LRScheduler
 import torch.nn.functional as F
 import math
+from tqdm import tqdm
 
 def add_Gaussian_noise(img, noise_level1=2, noise_level2=25):
     '''
@@ -270,29 +271,19 @@ def compute_global_min_max(root_dir):
 
     global_min = float('inf')
     global_max = float('-inf')
-    for class_name in os.listdir(data_path):
-        class_path = os.path.join(data_path, class_name)
-        if os.path.isdir(class_path):
-            for fname in os.listdir(class_path):
-                if fname.endswith(".npy"):
-                    arr = np.load(os.path.join(class_path, fname))
-                    global_min = min(global_min, arr.min())
-                    global_max = max(global_max, arr.max())
-                elif fname.endswith(".pt"):
-                    arr = torch.load(os.path.join(class_path, fname))
-                    global_min = min(global_min, arr.min())
-                    global_max = max(global_max, arr.max())
-                else:
-                    raise ValueError(f"The files are not in numpy type. {fname}")
+
+    for fname in tqdm(os.listdir(data_path), desc="computing global min, max..."):
+        if fname.endswith(".npy"):
+            arr = np.load(os.path.join(data_path, fname))
+            global_min = min(global_min, arr.min())
+            global_max = max(global_max, arr.max())
+        elif fname.endswith(".pt"):
+            arr = torch.load(os.path.join(data_path, fname))
+            global_min = min(global_min, arr.min())
+            global_max = max(global_max, arr.max())
+        else:
+            raise ValueError(f"The following file is neither in numpy type nor torch type. {fname}")
     return global_min, global_max
-
-class GlobalMinMaxScaler:
-    def __init__(self, global_min, global_max):
-        self.global_min = global_min
-        self.global_max = global_max
-
-    def __call__(self, arr):
-        return 2 * (arr - self.global_min) / (self.global_max - self.global_min) - 1
     
 class get_data_superres_PLAIN(Dataset):
     def __init__(self, root_dir, transform):
