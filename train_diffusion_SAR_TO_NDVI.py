@@ -239,7 +239,7 @@ class Diffusion:
 
         global_min_opt = float(torch.load(os.path.join(os.path.dirname(os.path.dirname(self.snapshot_path)), "min_opt.pt")))
         global_max_opt = float(torch.load(os.path.join(os.path.dirname(os.path.dirname(self.snapshot_path)), "max_opt.pt")))
-
+        
         x = (x+1)*(global_max_opt-global_min_opt)/2 + global_min_opt
     
         latent_NDVI_img = x
@@ -769,8 +769,6 @@ def dataloader_PRE_encoding_maker(dataset_path, batch_size, multiple_gpus):
     return train_loader, val_loader
 
 def dataloader_POST_encoding_maker(dataset_path, batch_size, multiple_gpus):
-    # global_min, global_max = compute_global_min_max(dataset_path)
-    # transform = GlobalMinMaxScaler(global_min, global_max)
     dataset = get_data_SAR_TO_NDVI(dataset_path, SAR_channels=4, data_format="torch", transform=None)
     if multiple_gpus:
         dataloader = DataLoader(dataset=dataset, batch_size=batch_size, shuffle=False, sampler=DistributedSampler(dataset),drop_last=True)

@@ -5,7 +5,7 @@ import torch.nn as nn
 from torchvision import transforms, models
 from tqdm import tqdm
 from torch.utils.data import DataLoader
-from utils import get_data_superres, get_data_superres_BSRGAN, get_data_superres_PLAIN, video_maker, CosineAnnealingWarmupRestarts, compute_global_min_max, GlobalMinMaxScaler
+from utils import get_data_superres, get_data_superres_BSRGAN, get_data_superres_PLAIN, video_maker, CosineAnnealingWarmupRestarts, compute_global_min_max
 import copy
 import numpy as np
 
@@ -257,9 +257,10 @@ class Diffusion:
             video_maker(frames, os.path.join(os.getcwd(), 'models_run', self.model_name, 'results', 'video_denoising.mp4'), 100)
             del frames
 
-        # global_min = float(np.load(os.path.join(os.path.dirname(os.path.dirname(self.snapshot_path)), "global_min.npy")))
-        # global_max = float(np.load(os.path.join(os.path.dirname(os.path.dirname(self.snapshot_path)), "global_max.npy")))
-        # x = (x+1)*(global_max-global_min)/2 +global_min
+        global_min_hr_img = float(torch.load(os.path.join(os.path.dirname(os.path.dirname(self.snapshot_path)), "min_hr_img.pt"))) 
+        global_max_hr_img = float(torch.load(os.path.join(os.path.dirname(os.path.dirname(self.snapshot_path)), "max_hr_img.pt")))
+        import ipdb; ipdb.set_trace()
+        x = (x+1)*(global_max_hr_img-global_min_hr_img)/2 +global_min_hr_img
   
         latent_sr_img = x / SCALE
         latent_lr_img = lr_img / SCALE
@@ -454,7 +455,7 @@ class Diffusion:
         vae.eval()
         return vae
 
-    def encoded_dataset_VAE(self, dataloader, save_path):
+    def encoded_dataset_VAE(self, dataloader, save_path, min_max_path):
             import numpy as np
 
             SCALE = 0.18215 # The scaling factor is used to normalize the latent space variance to approximately 1. So that the Diffusion model (which expects 
@@ -463,25 +464,46 @@ class Diffusion:
             self.vae_model.eval()
             os.makedirs(os.path.join(save_path, "lr_img"), exist_ok=True)
             os.makedirs(os.path.join(save_path, "hr_img"), exist_ok=True)
-            pbar_dataloader = tqdm(dataloader, desc='Encoding dataset', position=0)
-            for i,(lr_img,hr_img) in enumerate(pbar_dataloader):
-                lr_img = lr_img.to(self.device)
-                hr_img = hr_img.to(self.device)
-                lr_img = F.interpolate(lr_img.to('cpu'), scale_factor=self.magnification_factor, mode='bicubic').to(self.device)
+            dataset = dataloader.dataset
+            for lr_img,hr_img in tqdm(dataset, desc="Encoding..."):
+                lr_img = lr_img.unsqueeze(0)
+                hr_img = hr_img.unsqueeze(0).to(self.device)
+                lr_img = F.interpolate(lr_img, scale_factor=self.magnification_factor, mode='bilinear').to(self.device)
                 if self.multiple_gpus:
                     lr_img = self.vae_model.module.encode(lr_img).latent_dist.sample() * SCALE
                     hr_img = self.vae_model.module.encode(hr_img).latent_dist.sample() * SCALE
                 else:
                     lr_img = self.vae_model.encode(lr_img).latent_dist.sample() * SCALE
                     hr_img = self.vae_model.encode(hr_img).latent_dist.sample() * SCALE
-                for idx in range(lr_img.shape[0]):
-                    unique_id = uuid.uuid4().hex
-                    lr_img_to_save = lr_img[idx].permute(1,2,0).detach().cpu().numpy()
-                    hr_img_to_save = hr_img[idx].permute(1,2,0).detach().cpu().numpy()
-                    if np.isnan(lr_img_to_save).any() or np.isnan(hr_img_to_save).any():
-                        print(f"NaN values found in the images at index {idx}. Skipping this image.")
-                    np.save(os.path.join(save_path, "lr_img",  f'{unique_id}'), lr_img_to_save)
-                    np.save(os.path.join(save_path, "hr_img",  f'{unique_id}'), hr_img_to_save)
+
+                unique_id = uuid.uuid4().hex
+                torch.save(lr_img, os.path.join(save_path, "lr_img", f"{unique_id}"+".pt"))
+                torch.save(hr_img, os.path.join(save_path, "hr_img", f"{unique_id}"+".pt"))
+
+            if "train" in save_path and not os.path.exists(os.path.join(min_max_path, "min_lr_img.pt")):
+                global_min_lr_img, global_max_lr_img = compute_global_min_max(os.path.join(save_path, "lr_img"))
+                global_min_hr_img, global_max_hr_img = compute_global_min_max(os.path.join(save_path, "hr_img"))
+                torch.save(global_min_lr_img, os.path.join(min_max_path, "min_lr_img.pt"))
+                torch.save(global_max_lr_img, os.path.join(min_max_path, "max_lr_img.pt"))
+                torch.save(global_min_hr_img, os.path.join(min_max_path, "min_hr_img.pt"))
+                torch.save(global_max_hr_img, os.path.join(min_max_path, "max_hr_img.pt"))
+            else:
+                global_min_lr_img = torch.load(os.path.join(min_max_path, "min_lr_img.pt"))
+                global_max_lr_img = torch.load(os.path.join(min_max_path, "max_lr_img.pt"))
+                global_min_hr_img = torch.load(os.path.join(min_max_path, "min_hr_img.pt"))
+                global_max_hr_img = torch.load(os.path.join(min_max_path, "max_hr_img.pt"))
+
+            for img_type in ["lr_img", "hr_img"]:
+                img_type_path = os.path.join(save_path, img_type) 
+                for img_name in tqdm(os.listdir(img_type_path), desc="Standardizing..."):
+                    img_path = os.path.join(img_type_path, img_name)
+                    img = torch.load(img_path).to(self.device)
+                    if img_type == "lr_img":
+                        img = 2*(img-global_min_lr_img)/(global_max_lr_img-global_min_lr_img)-1
+                    elif img_type == "hr_img":
+                        img = 2*(img-global_min_hr_img)/(global_max_hr_img-global_min_hr_img)-1
+                    os.remove(os.path.join(img_path))
+                    torch.save(img[0], os.path.join(img_path))
             
     def train(self, lr, epochs, check_preds_epoch, train_loader, val_loader, patience, loss, lr_scheduler=None):
         '''
@@ -541,7 +563,7 @@ class Diffusion:
             if self.multiple_gpus:
                 train_loader.sampler.set_epoch(epoch) # ensures that the data is shuffled in a consistent manner across multiple epochs (it is useful just for the DistributedSampler)
 
-            b_sz = len(next(iter(train_loader))[0])
+            b_sz = train_loader.batch_size
             print(f"\n\n[GPU{self.device}] Epoch {epoch} | Batchsize: {b_sz} | Steps: {len(train_loader)}")
             
             pbar_train = tqdm(train_loader,desc='Training', position=0)
@@ -821,14 +843,12 @@ def dataloader_PRE_encoding_maker(dataset_path, Degradation_type, image_size, ma
     return train_loader, val_loader
 
 def dataloader_POST_encoding_maker(dataset_path, batch_size, multiple_gpus):
-    global_min, global_max = compute_global_min_max(dataset_path)
-    transform = GlobalMinMaxScaler(global_min, global_max) # it scaled the images in the range [-1,1] because the diffusion model operates better with this range of values.
-    dataset = get_data_superres_PLAIN(dataset_path, transform)
+    dataset = get_data_superres_PLAIN(dataset_path)
     if multiple_gpus:
         dataloader = DataLoader(dataset=dataset, batch_size=batch_size, shuffle=False, sampler=DistributedSampler(dataset),drop_last=True)
     else:
         dataloader = DataLoader(dataset=dataset, batch_size=batch_size, shuffle=True, drop_last=True)
-    return dataloader, global_min, global_max
+    return dataloader
 
 def UNet_model_maker(UNet_type, input_channels, output_channels, device, image_size):
     if UNet_type.lower() == 'residual attention unet':
@@ -860,7 +880,7 @@ def VAE_model_maker(device):
     vae_model = pipe.vae.to(device)
     return vae_model
 
-def VAE_finetuning(dataset_path, Degradation_type, image_size, magnification_factor, Blur_radius, VAE_weight_path, num_crops=1, batch_size=16, multiple_gpus=False, device='cuda'):
+def VAE_finetuning(dataset_path, Degradation_type, image_size, magnification_factor, Blur_radius, VAE_weight_path, min_max_path, num_crops=1, batch_size=16, multiple_gpus=False, device='cuda'):
 
     train_loader, val_loader = dataloader_PRE_encoding_maker(dataset_path=dataset_path, Degradation_type=Degradation_type,
                                                  image_size=image_size, magnification_factor=magnification_factor,
@@ -887,11 +907,11 @@ def VAE_finetuning(dataset_path, Degradation_type, image_size, magnification_fac
     encoded_images_val_save_path = os.path.join(dataset_path+'_VAE_encoded', "val_original")
     if os.path.exists(os.path.join(encoded_images_train_save_path, 'lr_img')):
         if len(os.listdir(os.path.join(encoded_images_train_save_path, 'lr_img'))) == 0:
-            diffusion.encoded_dataset_VAE(dataloader=train_loader, save_path=encoded_images_train_save_path)
-            diffusion.encoded_dataset_VAE(dataloader=val_loader, save_path=encoded_images_val_save_path)
+            diffusion.encoded_dataset_VAE(dataloader=train_loader, save_path=encoded_images_train_save_path, min_max_path=min_max_path)
+            diffusion.encoded_dataset_VAE(dataloader=val_loader, save_path=encoded_images_val_save_path, min_max_path=min_max_path)
     else:
-        diffusion.encoded_dataset_VAE(dataloader=train_loader, save_path=encoded_images_train_save_path)
-        diffusion.encoded_dataset_VAE(dataloader=val_loader, save_path=encoded_images_val_save_path)
+        diffusion.encoded_dataset_VAE(dataloader=train_loader, save_path=encoded_images_train_save_path, min_max_path=min_max_path)
+        diffusion.encoded_dataset_VAE(dataloader=val_loader, save_path=encoded_images_val_save_path, min_max_path=min_max_path)
 
     ########## RENAME IMAGES (OPTIONAL) ##########
     # for set_path in [encoded_images_train_save_path, encoded_images_val_save_path]:
@@ -942,10 +962,8 @@ def Diffusion_training(snapshot_folder_path, model_name, snapshot_name,
     encoded_images_val_save_path = os.path.join(dataset_path, "val_original")
 
     ########## CREATE DATALOADERS FOR THE POST-ENCODING MODEL ##########
-    train_loader, global_min, global_max = dataloader_POST_encoding_maker(encoded_images_train_save_path, batch_size, multiple_gpus)
-    # val_loader, global_min, global_max = dataloader_POST_encoding_maker(encoded_images_val_save_path, batch_size, multiple_gpus)
-    np.save(os.path.join(os.path.dirname(snapshot_folder_path), "global_min.npy"),global_min)
-    np.save(os.path.join(os.path.dirname(snapshot_folder_path), "global_max.npy"), global_max)
+    train_loader = dataloader_POST_encoding_maker(encoded_images_train_save_path, batch_size, multiple_gpus)
+    # val_loader = dataloader_POST_encoding_maker(encoded_images_val_save_path, batch_size, multiple_gpus)
     val_loader = None
     ########## TRAIN DIFFUSION MODEL ##########
     diffusion.train(
@@ -1089,8 +1107,11 @@ def launch(args):
         device = torch.device('cuda' if torch.cuda.is_available() else 'mps' if torch.backends.mps.is_available() else 'cpu')
         print(f'Using single device: {device}')
 
+    min_max_path = os.path.dirname(snapshot_folder_path)
+
     # VAE_finetuning(dataset_path=dataset_path, Degradation_type=Degradation_type, image_size=image_size,
-    #                 magnification_factor=magnification_factor, Blur_radius=Blur_radius,VAE_weight_path=VAE_weight_path, num_crops=num_crops,
+    #                 magnification_factor=magnification_factor, Blur_radius=Blur_radius,VAE_weight_path=VAE_weight_path,
+    #                       min_max_path=min_max_path, num_crops=num_crops,
     #                     batch_size=batch_size, multiple_gpus=multiple_gpus, device=device)
     
     # Diffusion_training(snapshot_folder_path=snapshot_folder_path, model_name=model_name, snapshot_name=snapshot_name,

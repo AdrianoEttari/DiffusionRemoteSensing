@@ -208,8 +208,8 @@ def compute_global_min_max(root_dir):
         class_path = os.path.join(data_path, class_name)
         if os.path.isdir(class_path):
             for fname in os.listdir(class_path):
-                if fname.endswith(".npy"):
-                    arr = np.load(os.path.join(class_path, fname))
+                if fname.endswith(".pt"):
+                    arr = torch.load(os.path.join(class_path, fname))
                     global_min = min(global_min, arr.min())
                     global_max = max(global_max, arr.max())
                 else:
@@ -224,7 +224,7 @@ class GlobalMinMaxScaler:
     def __call__(self, arr):
         return 2 * (arr - self.global_min) / (self.global_max - self.global_min) - 1
 
-class NPYFolderDataset(Dataset):
+class PTFolderDataset(Dataset):
     def __init__(self, root_dir, transform=None):
         self.samples = []
         self.class_to_idx = {}
@@ -240,7 +240,7 @@ class NPYFolderDataset(Dataset):
                     self.classes.append(class_name)
 
                 for fname in os.listdir(class_path):
-                    if fname.endswith(".npy"):
+                    if fname.endswith(".pt"):
                         self.samples.append((os.path.join(class_path, fname), self.class_to_idx[class_name]))
 
     def __len__(self):
@@ -248,12 +248,14 @@ class NPYFolderDataset(Dataset):
 
     def __getitem__(self, idx):
         path, label = self.samples[idx]
-        arr = np.load(path).astype(np.float32)
+        # arr = np.load(path).astype(np.float32)
+        tensor = torch.load(path)
         if self.transform:
-            arr = self.transform(arr)
+            # arr = self.transform(arr)
+            tensor = self.transform(tensor)
 
         # tensor = torch.from_numpy(arr)
-        tensor = transforms.ToTensor()(arr)
+        # tensor = transforms.ToTensor()(arr)
 
         return tensor, label
 

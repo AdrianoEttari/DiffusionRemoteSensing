@@ -8,7 +8,7 @@ VAE_model_name="VAE_102flowers_finetuning_gradientAccumulation.pt"
 
 ###### FINETUNING VAE ######
 # dataset_path="102flowers_dataset"
-# python train_diffusion_generation.py --dataset_path="$dataset_path" --image_size=512 --batch_size=1 --multiple_gpus=False --VAE_weight_path="$VAE_model_name" 
+# python train_diffusion_generation.py --dataset_path="$dataset_path" --model_name="$model_name" --image_size=512 --batch_size=1 --multiple_gpus=False --VAE_weight_path="$VAE_model_name" 
 
 ##### DIFFUSION TRAINING ######
 # dataset_path="102flowers_dataset_VAE_encoded"

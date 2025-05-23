@@ -286,12 +286,13 @@ def compute_global_min_max(root_dir):
     return global_min, global_max
     
 class get_data_superres_PLAIN(Dataset):
-    def __init__(self, root_dir, transform):
+    def __init__(self, root_dir, transform=None, data_format='torch'):
         self.root_dir = root_dir
         self.transform = transform
         self.lr_imgs_folder = os.path.join(root_dir, 'lr_img')
         self.hr_imgs_folder = os.path.join(root_dir, 'hr_img')
         self.filenames = sorted(os.listdir(self.lr_imgs_folder)) # lr_img and hr_img filenames are the same
+        self.data_format = data_format
 
     def __len__(self):
         return len(self.filenames)
@@ -299,10 +300,17 @@ class get_data_superres_PLAIN(Dataset):
     def __getitem__(self, idx):
         lr_img_path = os.path.join(self.lr_imgs_folder, self.filenames[idx])
         hr_img_path = os.path.join(self.hr_imgs_folder, self.filenames[idx])
-        lr_img = np.load(lr_img_path)
-        hr_img = np.load(hr_img_path)
-        lr_img = transforms.ToTensor()(self.transform(lr_img))
-        hr_img = transforms.ToTensor()(self.transform(hr_img))
+        if self.data_format == "numpy":
+            lr_img = np.load(lr_img_path)
+            hr_img = np.load(hr_img_path)
+            lr_img = transforms.ToTensor()(lr_img)
+            hr_img = transforms.ToTensor()(hr_img)
+        elif self.data_format == "torch":
+            lr_img = torch.load(lr_img_path)
+            hr_img = torch.load(hr_img_path)
+        if self.transform:
+            lr_img = self.transform(lr_img)
+            hr_img = self.transform(hr_img)
         return lr_img, hr_img
 
 class get_data_patches_lr(Dataset):

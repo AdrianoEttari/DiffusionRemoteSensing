@@ -6,7 +6,7 @@ import torchvision.transforms as transforms
 from tqdm import tqdm
 from torch.utils.data import DataLoader
 import copy
-from utils import video_maker, CosineAnnealingWarmupRestarts, dataset_maker, NPYFolderDataset, GlobalMinMaxScaler, compute_global_min_max
+from utils import video_maker, CosineAnnealingWarmupRestarts, dataset_maker, PTFolderDataset, compute_global_min_max
 import numpy as np
 import torchvision.datasets as datasets
 
@@ -231,20 +231,11 @@ class Diffusion:
             video_maker(frames, os.path.join(os.getcwd(), 'models_run', self.model_name, 'results', 'video_denoising.mp4'), 100)
             del frames
         
-        # import ipdb; ipdb.set_trace() ############ DEBUG ##########
-        global_min = float(np.load(os.path.join(os.path.dirname(os.path.dirname(self.snapshot_path)), "global_min.npy")))
-        global_max = float(np.load(os.path.join(os.path.dirname(os.path.dirname(self.snapshot_path)), "global_max.npy")))
+        global_min = float(torch.load(os.path.join(os.path.dirname(os.path.dirname(self.snapshot_path)), "global_min.pt")))
+        global_max = float(torch.load(os.path.join(os.path.dirname(os.path.dirname(self.snapshot_path)), "global_max.pt")))
         x = (x+1)*(global_max-global_min)/2 +global_min
 
-        # (scaled+1)*(x.max-x.min)/2 +x.min() = x
-        # (np.float32(-16.640661), np.float32(13.159316))
         latent_img = x / SCALE
-
-
-        
-        # img = transforms.ToTensor()(np.load(os.path.join("..","102flowers_dataset_VAE_encoded","0","0c0844c32abd409d83c266df1a0a8772.npy"))).unsqueeze(0).to('cuda') / SCALE ############ DEBUG ##########
-        # fig, axs = plt.subplots(2,2); axs = axs.ravel(); axs[0].imshow(latent_img[0].permute(1,2,0).detach().cpu()); axs[1].imshow(img[0].permute(1,2,0).detach().cpu()); axs[2].hist(latent_img.ravel().detach().cpu()); axs[3].hist(img[0].ravel().detach().cpu()); plt.show()  ############ DEBUG ##########
-
 
         # Delete unnecessary tensors to remove references
         del x, predicted_noise, noise  
@@ -258,10 +249,6 @@ class Diffusion:
         # Perform inference without gradient tracking to save VRAM
         with torch.no_grad():
             generated_image = self.vae_model.decode(latent_img).sample
-
-            # generated_img_2 = self.vae_model.decode(img).sample ############ DEBUG ##########
-        # fig, axs = plt.subplots(2,2); axs = axs.ravel(); axs[0].imshow(generated_image[0].permute(1,2,0).detach().cpu()); axs[1].imshow(generated_img_2[0].permute(1,2,0).detach().cpu()); axs[2].hist(generated_image[0].ravel().detach().cpu()); axs[3].hist(generated_img_2.ravel().detach().cpu()); plt.show() ############ DEBUG ##########
-
 
         model.train() # enables dropout and batch normalization
         return generated_image
@@ -431,25 +418,41 @@ class Diffusion:
         vae.eval()
         return vae
 
-    def encoded_dataset_VAE(self, dataloader, save_path):
+    def encoded_dataset_VAE(self, dataloader, save_path, min_max_path):
             import numpy as np
 
             SCALE = 0.18215 # The scaling factor is used to normalize the latent space variance to approximately 1. So that the Diffusion model (which expects 
             # standard normal noise) can work properly.
 
             self.vae_model.eval()
-            pbar_dataloader = tqdm(dataloader, desc='Encoding dataset', position=0)
-            for i, (img,label) in enumerate(pbar_dataloader):
+            dataset = dataloader.dataset
+            for img,label in tqdm(dataset, desc="Encoding..."):
                 os.makedirs(os.path.join(save_path, str(int(label))), exist_ok=True)
-                img = img.to(self.device)
+                img = img.unsqueeze(0).to(self.device)
                 if self.multiple_gpus:
                     img = self.vae_model.module.encode(img).latent_dist.sample() * SCALE
                 else:
                     img = self.vae_model.encode(img).latent_dist.sample() * SCALE
-                for idx in range(img.shape[0]):
-                    unique_id = uuid.uuid4().hex
-                    img_to_save = img[idx].permute(1,2,0).detach().cpu().numpy()
-                    np.save(os.path.join(save_path, str(int(label)),  f'{unique_id}'), img_to_save)
+                
+                unique_id = uuid.uuid4().hex
+                torch.save(img, os.path.join(save_path, str(int(label)), f"{unique_id}"+".pt"))
+
+            if not os.path.exists(os.path.join(min_max_path, "global_min.pt")):
+                global_min, global_max = compute_global_min_max(os.path.join(save_path))
+                torch.save(global_min, os.path.join(min_max_path, "global_min.pt"))
+                torch.save(global_max, os.path.join(min_max_path, "global_max.pt"))
+            else:
+                global_min = torch.load(os.path.join(min_max_path, "global_min.pt"))
+                global_max = torch.load(os.path.join(min_max_path, "global_max.pt"))
+                
+            for class_name in os.listdir(save_path):
+                class_path = os.path.join(save_path, class_name) 
+                for img_name in tqdm(os.listdir(class_path), desc="Standardizing..."):
+                    img_path = os.path.join(class_path, img_name)
+                    img = torch.load(img_path).to(self.device)
+                    img = 2*(img-global_min)/(global_max-global_min)-1
+                    os.remove(os.path.join(img_path))
+                    torch.save(img[0], os.path.join(img_path))
 
     def train(self, lr, epochs, check_preds_epoch, train_loader, val_loader, patience, loss, lr_scheduler=None):
         '''
@@ -665,15 +668,13 @@ def dataloader_PRE_encoding_maker(dataset_path, image_size, batch_size, multiple
     return train_loader, num_classes
 
 def dataloader_POST_encoding_maker(dataset_path, batch_size, multiple_gpus):
-    global_min, global_max = compute_global_min_max(dataset_path)
-    transform = GlobalMinMaxScaler(global_min, global_max) # it scaled the images in the range [-1,1] because the diffusion model operates better with this range of values.
-    dataset = NPYFolderDataset(dataset_path, transform=transform)
+    dataset = PTFolderDataset(dataset_path, transform=None)
     num_classes = len(dataset.classes)
     if multiple_gpus:
         dataloader = DataLoader(dataset=dataset, batch_size=batch_size, shuffle=False, sampler=DistributedSampler(dataset),drop_last=True)
     else:
         dataloader = DataLoader(dataset=dataset, batch_size=batch_size, shuffle=True, drop_last=True)
-    return dataloader, num_classes, global_min, global_max
+    return dataloader, num_classes
 
 def VAE_model_maker(device):
     vae_model_path = "CompVis/stable-diffusion-v1-4"
@@ -681,7 +682,7 @@ def VAE_model_maker(device):
     vae_model = pipe.vae.to(device)
     return vae_model
 
-def VAE_finetuning(dataset_path, image_size, batch_size, multiple_gpus, VAE_weight_path, device):
+def VAE_finetuning(dataset_path, image_size, batch_size, multiple_gpus, VAE_weight_path, min_max_path, device):
 
     train_loader, num_classes = dataloader_PRE_encoding_maker(dataset_path=dataset_path, image_size=image_size, batch_size=batch_size, multiple_gpus=multiple_gpus)
     
@@ -704,9 +705,9 @@ def VAE_finetuning(dataset_path, image_size, batch_size, multiple_gpus, VAE_weig
     encoded_images_train_save_path = os.path.join(dataset_path+'_VAE_encoded')
     if os.path.exists(os.path.join(encoded_images_train_save_path, 'img')):
         if len(os.listdir(os.path.join(encoded_images_train_save_path, 'img'))) == 0:
-            diffusion.encoded_dataset_VAE(dataloader=train_loader, save_path=encoded_images_train_save_path)
+            diffusion.encoded_dataset_VAE(dataloader=train_loader, save_path=encoded_images_train_save_path, min_max_path=min_max_path)
     else:
-        diffusion.encoded_dataset_VAE(dataloader=train_loader, save_path=encoded_images_train_save_path)
+        diffusion.encoded_dataset_VAE(dataloader=train_loader, save_path=encoded_images_train_save_path, min_max_path=min_max_path)
         
     ########## RENAME IMAGES (OPTIONAL) ##########
     #     for i, img_name in tqdm(enumerate(os.listdir(os.path.join(encoded_images_train_save_path, "img"))), desc='Renaming images', position=0):
@@ -775,10 +776,8 @@ def Diffusion_training(snapshot_folder_path, model_name, snapshot_name,
 
     ########## CREATE DATALOADERS FOR THE POST-ENCODING MODEL ##########
     encoded_images_train_save_path = os.path.join(dataset_path)
-    train_loader, num_classes, global_min, global_max = dataloader_POST_encoding_maker(dataset_path=encoded_images_train_save_path, batch_size=batch_size, multiple_gpus=multiple_gpus)
+    train_loader, num_classes = dataloader_POST_encoding_maker(dataset_path=encoded_images_train_save_path, batch_size=batch_size, multiple_gpus=multiple_gpus)
     val_loader = None
-    np.save(os.path.join(os.path.dirname(snapshot_folder_path), "global_min.npy"),global_min)
-    np.save(os.path.join(os.path.dirname(snapshot_folder_path), "global_max.npy"), global_max)
     model = UNet_model_maker(UNet_type, input_channels, output_channels, num_classes, device)
 
     if multiple_gpus:
@@ -874,9 +873,13 @@ def launch(args):
     if lr_scheduler and lr_scheduler.lower() != 'none':
         print(f'Using {lr_scheduler} learning rate scheduler')
 
+
+    min_max_path = os.path.dirname(snapshot_folder_path)
+
     # VAE_finetuning(dataset_path=dataset_path, image_size=image_size,
     #                     batch_size=batch_size, multiple_gpus=multiple_gpus, 
-    #                         VAE_weight_path=VAE_weight_path, device=device)
+    #                         VAE_weight_path=VAE_weight_path,
+    #                          min_max_path=min_max_path, device=device)
 
     # Diffusion_training(snapshot_folder_path=snapshot_folder_path, model_name=model_name, snapshot_name=snapshot_name,
     #                     noise_steps=noise_steps, ema_smoothing=ema_smoothing,
