@@ -699,7 +699,7 @@ def VAE_finetuning(dataset_path, image_size, batch_size, multiple_gpus, VAE_weig
         device=device, image_size=image_size, model_name=None,
         multiple_gpus=multiple_gpus, ema_smoothing=None)
         
-    diffusion.fine_tuning_VAE(train_loader, epochs=50, learning_rate=1e-4)
+    # diffusion.fine_tuning_VAE(train_loader, epochs=50, learning_rate=1e-4)
 
     ########## ENCODE DATASET AND SAVE IT ##########
     encoded_images_train_save_path = os.path.join(dataset_path+'_VAE_encoded')
@@ -876,10 +876,10 @@ def launch(args):
 
     min_max_path = os.path.dirname(snapshot_folder_path)
 
-    # VAE_finetuning(dataset_path=dataset_path, image_size=image_size,
-    #                     batch_size=batch_size, multiple_gpus=multiple_gpus, 
-    #                         VAE_weight_path=VAE_weight_path,
-    #                          min_max_path=min_max_path, device=device)
+    VAE_finetuning(dataset_path=dataset_path, image_size=image_size,
+                        batch_size=batch_size, multiple_gpus=multiple_gpus, 
+                            VAE_weight_path=VAE_weight_path,
+                             min_max_path=min_max_path, device=device)
 
     # Diffusion_training(snapshot_folder_path=snapshot_folder_path, model_name=model_name, snapshot_name=snapshot_name,
     #                     noise_steps=noise_steps, ema_smoothing=ema_smoothing,
@@ -889,8 +889,8 @@ def launch(args):
     #                                  epochs=epochs,check_preds_epoch=check_preds_epoch, patience=patience,
     #                                   loss=loss, lr_scheduler=lr_scheduler, device=device)
     
-    generation_sampling(noise_schedule, snapshot_folder_path, snapshot_name, VAE_weight_path, noise_steps, image_size, ema_smoothing,
-                         UNet_type, model_name, generate_video, input_channels=4, output_channels=4, num_classes=num_classes, device='cuda')
+    # generation_sampling(noise_schedule, snapshot_folder_path, snapshot_name, VAE_weight_path, noise_steps, image_size, ema_smoothing,
+    #                      UNet_type, model_name, generate_video, input_channels=4, output_channels=4, num_classes=num_classes, device='cuda')
 
 
 if __name__ == '__main__':
