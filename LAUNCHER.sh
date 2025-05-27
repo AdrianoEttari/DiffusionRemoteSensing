@@ -40,9 +40,9 @@ python train_diffusion_superres.py --model_name="$model_name" --snapshot_name=sn
 
 ##################### SAR TO NDVI #####################
 
-# model_name="Residual_MultipleMultiHeadCrossAttention_UNet_SAR_to_NDVI_StableDiffusion_gradientAccumulation_VAEapart"
+model_name="Residual_MultipleMultiHeadCrossAttention_UNet_SAR_to_NDVI_StableDiffusion_gradientAccumulation_VAEapart"
 
-# VAE_model_name="VAE_SAR_TO_NDVI_finetuning_gradientAccumulation.pt"
+VAE_model_name="VAE_SAR_TO_NDVI_finetuning_gradientAccumulation.pt"
 
 ###### FINETUNING VAE ######
 # dataset_path="SAR_TO_NDVI_dataset"
@@ -56,5 +56,5 @@ python train_diffusion_superres.py --model_name="$model_name" --snapshot_name=sn
 
 
 ####### SAMPLING #######
-# dataset_path="SAR_TO_NDVI_dataset"
-# python train_diffusion_SAR_TO_NDVI.py --noise_schedule="cosine" --snapshot_name="snapshot.pt" --VAE_weight_path="$VAE_model_name" --noise_steps=1000 --image_size=128 --ema_smoothing=False --UNet_type="Residual Cross Attention UNet" --model_name="$model_name" --generate_video=False --dataset_path="$dataset_path" --batch_size=16
+dataset_path="SAR_TO_NDVI_dataset"
+python train_diffusion_SAR_TO_NDVI.py --noise_schedule="cosine" --snapshot_name="snapshot.pt" --VAE_weight_path="$VAE_model_name" --noise_steps=1000 --image_size=128 --ema_smoothing=False --UNet_type="Residual Cross Attention UNet" --model_name="$model_name" --generate_video=False --dataset_path="$dataset_path" --batch_size=16
