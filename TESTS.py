@@ -350,6 +350,8 @@ scheduler = CosineAnnealingWarmupRestarts(
                 warmup_steps=5,
                 gamma=0.9
             )
+# from torch.optim.lr_scheduler import CosineAnnealingLR
+# scheduler = CosineAnnealingLR(optimizer, T_max=15, eta_min=1e-6)
 
 transform = transforms.Compose([
 transforms.Resize((image_size, image_size)),
@@ -366,10 +368,13 @@ train_dataset = get_data_superres(train_path, magnification_factor, Blur_radius,
 train_loader = DataLoader(dataset=train_dataset, batch_size=batch_size, shuffle=True, drop_last=True)
 iters = len(train_loader)
 learning_rate = []
-for epoch in range(5):
-    for i, sample in enumerate(train_loader):
-        scheduler.step()
-        learning_rate.append(optimizer.param_groups[0]['lr'])
+# for epoch in range(5):
+#     for i, sample in enumerate(train_loader):
+#         scheduler.step()
+#         learning_rate.append(optimizer.param_groups[0]['lr'])
+for epoch in range(100):
+    scheduler.step()
+    learning_rate.append(optimizer.param_groups[0]['lr'])
 
 plt.plot(learning_rate)
 plt.show()
