@@ -259,7 +259,7 @@ class Diffusion:
 
         global_min_hr_img = float(torch.load(os.path.join(os.path.dirname(os.path.dirname(self.snapshot_path)), "min_hr_img.pt"))) 
         global_max_hr_img = float(torch.load(os.path.join(os.path.dirname(os.path.dirname(self.snapshot_path)), "max_hr_img.pt")))
-        import ipdb; ipdb.set_trace()
+
         x = (x+1)*(global_max_hr_img-global_min_hr_img)/2 +global_min_hr_img
   
         latent_sr_img = x / SCALE
