@@ -171,6 +171,7 @@ SAR_TO_NDVI_dataset/
 Tiny_ImageNet_200/
 celebA_10k/
 up42_sentinel2_patches/
+102flowers*
 # Files
 .DS_Store
 assets/UP42_SUPERRESOLUTION/DownBlur/lr_hr_sr.png

@@ -1,5 +1,7 @@
 # Adaptation of Diffusion Models for Remote Sensing Imagery
 
+[![Paper](https://img.shields.io/badge/Paper-green)](https://ieeexplore.ieee.org/document/10642573) [![LinkedIn](https://img.shields.io/badge/LinkedIn-%230077B5.svg?logo=linkedin&logoColor=white)](https://www.linkedin.com/in/adriano-ettari-b8741b21b/)
+
 In this repository, I adapted the Diffusion Models to Remote Sensing images for three different tasks: Super Resolution, Image Generation, and SAR to NDVI conversion.
 
 ## Summary of the Files and Folders 
@@ -72,7 +74,7 @@ python3 train_diffusion_superres.py --epochs=1001 --noise_schedule='cosine' --ba
 ```
 
 ## Documentation
-This work was presented at the IGARSS 2024 conference and published in the IEEE Xplore digital library. The articale is available [here](https://ieeexplore.ieee.org/document/10642573).
+This work was presented at the IGARSS 2024 conference and published in the IEEE Xplore digital library. The paper is available here [![Paper](https://img.shields.io/badge/Paper-green)](https://ieeexplore.ieee.org/document/10642573) 
 
 ## Contact
 If you have any questions, feel free to contact me at `adriano.ettari@unina.it` or on my LinkedIn page [![LinkedIn](https://img.shields.io/badge/LinkedIn-%230077B5.svg?logo=linkedin&logoColor=white)](https://www.linkedin.com/in/adriano-ettari-b8741b21b/)
