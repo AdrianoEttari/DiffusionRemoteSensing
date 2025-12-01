@@ -42,6 +42,7 @@ stacked = np.stack(images_arrays, axis=-1).astype(np.float32)
 # Per-band min-max normalization to [0,1]
 for i in range(stacked.shape[-1]):
     band = stacked[:, :, i]
+    stacked[:, :, i] = band
     stacked[:, :, i] = (band - band.min()) / (band.max() - band.min())
 
 patches = patchify(
@@ -50,8 +51,7 @@ patches = patchify(
     step=step
 )
 
-
-# %% SUPER-RESOLUTION
+# %% SUPER-RESOLUTION from array
 from train_diffusion_superres import Diffusion, UNet_model_maker, VAE_model_maker
 import matplotlib.pyplot as plt
 import os
@@ -92,7 +92,117 @@ diffusion = Diffusion(
     image_size=image_size, model_name=model_name, Degradation_type=Degradation_type,
     multiple_gpus=False, ema_smoothing=False)
 
-def img_processing(img_path, image_size, degradation=False):
+def img_processing_from_numpy(numpy_array, image_size, degradation=True):
+    # Ensure numpy array is uint8
+    if numpy_array.dtype != np.uint8:
+        numpy_array = (numpy_array * 255).clip(0, 255).astype(np.uint8)
+
+    # Convert NumPy array to PIL Image
+    if numpy_array.ndim == 2:  # grayscale
+        img = Image.fromarray(numpy_array, mode='L')
+    elif numpy_array.shape[2] == 3:  # RGB
+        img = Image.fromarray(numpy_array, mode='RGB')
+    else:
+        raise ValueError("Unsupported image shape")
+
+    to_tensor = transforms.ToTensor()
+
+    if degradation:
+        magnification_factor = 4
+        blur_radius = 0.5
+
+        # Resize (high quality image first)
+        transform = transforms.Resize((image_size, image_size))
+        img = transform(img)
+
+        # Downsample
+        downsample = transforms.Resize(
+            (img.size[1] // magnification_factor,
+             img.size[0] // magnification_factor),
+            interpolation=transforms.InterpolationMode.BICUBIC
+        )
+
+        img_down = downsample(img)
+
+        # Blur
+        img_down = img_down.filter(ImageFilter.GaussianBlur(blur_radius))
+
+        # Convert to tensor
+        img_down = to_tensor(img_down)
+
+    else:
+        img = transforms.Resize((image_size, image_size))(img)
+        img_down = to_tensor(img)
+
+    return img_down
+
+img = img_processing_from_numpy(patches[0][10][0], image_size=image_size, degradation=True).to(device)
+img_original = patches[0][10][0]
+
+to_tensor = transforms.ToTensor()
+img_original_tensor = to_tensor(img_original).unsqueeze(0).to(device)
+latent_hr_img = diffusion.vae_model.encode(img_original_tensor).latent_dist.sample()
+
+fig, axs = plt.subplots(2,3, figsize=(15,15))
+axs = axs.ravel()
+latent_lr_img, latent_sr_img, superres_img = diffusion.sample(n=1,model=model, lr_img=img, generate_video=False)
+
+axs[0].imshow(img.permute(1,2,0).detach().cpu().numpy())
+axs[0].set_title('Low resolution image')
+axs[1].imshow(img_original)
+axs[1].set_title('High resolution image')
+axs[2].imshow(superres_img[0].permute(1,2,0).detach().cpu().numpy())
+axs[2].set_title('Super resolution image')
+
+axs[3].imshow(latent_lr_img[0][:3,:,:].permute(1,2,0).detach().cpu().numpy())
+axs[3].set_title('Low resolution latent')
+axs[4].imshow(latent_hr_img[0][:3,:,:].permute(1,2,0).detach().cpu().numpy())
+axs[4].set_title('High resolution latent')
+axs[5].imshow(latent_sr_img[0][:3,:,:].permute(1,2,0).detach().cpu().numpy())
+axs[5].set_title('Super resolution latent')
+plt.show()
+# %% SUPER-RESOLUTION from path
+from train_diffusion_superres import Diffusion, UNet_model_maker, VAE_model_maker
+import matplotlib.pyplot as plt
+import os
+import torch
+import numpy as np
+from PIL import Image, ImageFilter
+from torchvision import transforms
+
+device = "cuda"
+model_name="Residual_MultipleMultiHeadCrossAttention_UNet_superres_magnification4_LRimgsize64_up42_sentinel2_patches_downblur_StableDiffusion_LRandHR_gradientAccumulation_VAEapart_MSE_CLIPLoss"
+VAE_model_name="VAE_up42_LRandHR_finetuning_gradientAccumulation.pt"
+snapshot_name="snapshot.pt"
+UNet_type="Residual Cross Attention UNet"
+input_channels=output_channels=4
+snapshot_folder_path = os.path.join(os.curdir, 'models_run', model_name, 'weights')
+image_size=256
+noise_schedule="cosine"
+noise_steps=1000
+magnification_factor=4
+Degradation_type="DownBlur"
+Blur_radius=0.5
+generate_video=False
+VAE_weight_path = os.path.join('models_run', VAE_model_name)
+
+model = UNet_model_maker(UNet_type, input_channels, output_channels, device, image_size)
+print("Num params: ", sum(p.numel() for p in model.parameters()))
+
+vae_model = VAE_model_maker(device)
+
+snapshot_path = os.path.join(snapshot_folder_path, snapshot_name)
+
+diffusion = Diffusion(
+    noise_schedule=noise_schedule, model=model, vae_model=vae_model,
+    snapshot_path=snapshot_path,
+    VAE_weight_path=VAE_weight_path,
+    noise_steps=noise_steps, beta_start=1e-4, beta_end=0.02, 
+    magnification_factor=magnification_factor,device=device,
+    image_size=image_size, model_name=model_name, Degradation_type=Degradation_type,
+    multiple_gpus=False, ema_smoothing=False)
+
+def img_processing_from_path(img_path, image_size, degradation=False):
     img = Image.open(img_path)
     to_tensor = transforms.ToTensor()
     if degradation:
@@ -118,34 +228,38 @@ def img_processing(img_path, image_size, degradation=False):
         img_down = to_tensor(img)
     return img_down
 
-img_path = os.path.join("up42_sentinel2_patches","test_original","patch_256_7424.png")
 
-img = img_processing(img_path, image_size=image_size, degradation=True).to(device)
-img_original = np.array(Image.open(img_path))
 
-to_tensor = transforms.ToTensor()
-img_original_tensor = to_tensor(img_original).unsqueeze(0).to(device)
-latent_hr_img = diffusion.vae_model.encode(img_original_tensor).latent_dist.sample()
-######### SAMPLING ##########
-fig, axs = plt.subplots(2,3, figsize=(15,15))
-axs = axs.ravel()
-latent_lr_img, latent_sr_img, superres_img = diffusion.sample(n=1,model=model, lr_img=img, generate_video=False)
+img_folder_path = os.path.join("up42_sentinel2_patches","test_original")
 
-axs[0].imshow(img.permute(1,2,0).detach().cpu().numpy())
-axs[0].set_title('Low resolution image')
-axs[1].imshow(img_original)
-axs[1].set_title('High resolution image')
-axs[2].imshow(superres_img[0].permute(1,2,0).detach().cpu().numpy())
-axs[2].set_title('Super resolution image')
+for filename in os.listdir(img_folder_path)[10:15]:
+    img_path = os.path.join(img_folder_path, filename)
+    img = img_processing_from_path(img_path, image_size=image_size, degradation=True).to(device)
+    img_original = np.array(Image.open(img_path))
 
-axs[3].imshow(latent_lr_img[0][:3,:,:].permute(1,2,0).detach().cpu().numpy())
-axs[3].set_title('Low resolution latent')
-axs[4].imshow(latent_hr_img[0][:3,:,:].permute(1,2,0).detach().cpu().numpy())
-axs[4].set_title('High resolution latent')
-axs[5].imshow(latent_sr_img[0][:3,:,:].permute(1,2,0).detach().cpu().numpy())
-axs[5].set_title('Super resolution latent')
-plt.show()
-# plt.savefig(os.path.join(os.getcwd(), 'models_run', model_name, 'results', 'superres_results.png'))
+    to_tensor = transforms.ToTensor()
+    img_original_tensor = to_tensor(img_original).unsqueeze(0).to(device)
+    latent_hr_img = diffusion.vae_model.encode(img_original_tensor).latent_dist.sample()
+
+    fig, axs = plt.subplots(2,3, figsize=(15,15))
+    axs = axs.ravel()
+    latent_lr_img, latent_sr_img, superres_img = diffusion.sample(n=1,model=model, lr_img=img, generate_video=False)
+
+    axs[0].imshow(img.permute(1,2,0).detach().cpu().numpy())
+    axs[0].set_title('Low resolution image')
+    axs[1].imshow(img_original)
+    axs[1].set_title('High resolution image')
+    axs[2].imshow(superres_img[0].permute(1,2,0).detach().cpu().numpy())
+    axs[2].set_title('Super resolution image')
+
+    axs[3].imshow(latent_lr_img[0][:3,:,:].permute(1,2,0).detach().cpu().numpy())
+    axs[3].set_title('Low resolution latent')
+    axs[4].imshow(latent_hr_img[0][:3,:,:].permute(1,2,0).detach().cpu().numpy())
+    axs[4].set_title('High resolution latent')
+    axs[5].imshow(latent_sr_img[0][:3,:,:].permute(1,2,0).detach().cpu().numpy())
+    axs[5].set_title('Super resolution latent')
+    plt.show()
+
 
 # %% EXAMPLE VAE ON up42
 from train_diffusion_superres import Diffusion, UNet_model_maker, VAE_model_maker
