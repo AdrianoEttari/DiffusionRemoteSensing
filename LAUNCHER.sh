@@ -8,7 +8,8 @@
 # model_name="Residual_MultiHeadCrossAttention_UNet_superres_magnification4_LRimgsize64_up42_sentinel2_patches_downblur_StableDiffusion_LRandHR_gradientAccumulation_VAEapart_17mln"
 # model_name="Residual_MultipleMultiHeadCrossAttention_UNet_superres_magnification4_LRimgsize64_celeb50k_patches_downblur_StableDiffusion_LRandHR_gradientAccumulation_VAEapart"
 # model_name="Residual_MultipleMultiHeadCrossAttention_UNet_superres_magnification4_LRimgsize64_up42_sentinel2_patches_downblur_StableDiffusion_LRandHR_gradientAccumulation_VAEapart"
-model_name="Residual_MultipleMultiHeadCrossAttention_UNet_superres_magnification4_LRimgsize64_up42_sentinel2_patches_downblur_StableDiffusion_LRandHR_gradientAccumulation_VAEapart_MSE_CLIPLoss"
+# model_name="Residual_MultipleMultiHeadCrossAttention_UNet_superres_magnification4_LRimgsize64_up42_sentinel2_patches_downblur_StableDiffusion_LRandHR_gradientAccumulation_VAEapart_MSE_CLIPLoss"
+model_name="Residual_MultipleMultiHeadCrossAttention_UNet_superres_magnification2_LRimgsize64_up42_sentinel2_patches_downblur_StableDiffusion_LRandHR_gradientAccumulation_VAEapart_MSE_CLIPLoss"
 
 VAE_model_name="VAE_up42_LRandHR_finetuning_gradientAccumulation.pt"
 # VAE_model_name="VAE_celeb100k_LRandHR_finetuning_gradientAccumulation.pt"
@@ -20,16 +21,16 @@ VAE_model_name="VAE_up42_LRandHR_finetuning_gradientAccumulation.pt"
 
 ###### DIFFUSION TRAINING ######
 # dataset_path="celebA_50k_VAE_encoded"
-# dataset_path="up42_sentinel2_patches_VAE_encoded"
-# python train_diffusion_superres.py --VAE_weight_path="$VAE_model_name" --model_name="$model_name" --snapshot_name=snapshot.pt --noise_steps=1000 --ema_smoothing=False --magnification_factor=4 --UNet_type="Residual Cross Attention UNet" --inp_out_channels=4 --batch_size=2 --image_size=256 --multiple_gpus=False --noise_schedule="cosine" --dataset_path="$dataset_path" --lr=1e-3 --epochs=2000 --check_preds_epoch=1 --patience=25  --loss="CLIP" --lr_schedule="cosine"
+dataset_path="up42_sentinel2_patches_VAE_encoded"
+python train_diffusion_superres.py --VAE_weight_path="$VAE_model_name" --model_name="$model_name" --snapshot_name=snapshot.pt --noise_steps=1000 --ema_smoothing=False --magnification_factor=2 --UNet_type="Residual Cross Attention UNet" --inp_out_channels=4 --batch_size=2 --image_size=256 --multiple_gpus=False --noise_schedule="cosine" --dataset_path="$dataset_path" --lr=1e-3 --epochs=2000 --check_preds_epoch=1 --patience=25  --loss="CLIP" --lr_schedule="cosine"
 # python train_diffusion_superres.py --model_name="Residual_Attention_UNet_superres_magnification4_LRimgsize64_celeb50k_patches_downblur_StableDiffusion_LRandHR_gradientAccumulation_VAEapart" --snapshot_name=snapshot.pt --noise_steps=1000 --ema_smoothing=False --magnification_factor=4 --UNet_type="Residual Cross Attention UNet" --inp_out_channels=4 --batch_size=32 --image_size=256 --multiple_gpus=False --noise_schedule="cosine" --dataset_path="celebA_50k_VAE_encoded" --lr=1e-3 --epochs=100 --check_preds_epoch=1 --patience=25  --loss="MSE" --lr_schedule="cosine"
 # python train_diffusion_superres.py --model_name="$model_name" --snapshot_name=snapshot.pt --noise_steps=5 --ema_smoothing=False --magnification_factor=4 --inp_out_channels=4 --batch_size=2 --image_size=256 --multiple_gpus=False --noise_schedule="cosine" --dataset_path="$dataset_path" --lr=1e-3 --epochs=100 --check_preds_epoch=1 --patience=25  --loss="MSE" --lr_schedule="cosine"
 
 
 ###### SAMPLING ######
 # dataset_path="celebA_100k"
-dataset_path="up42_sentinel2_patches"
-python train_diffusion_superres.py --model_name="$model_name" --snapshot_name=snapshot.pt --UNet_type="Residual Cross Attention UNet" --inp_out_channels=4 --image_size=256 --noise_schedule="cosine" --noise_steps=1000 --magnification_factor=4 --Degradation_type="DownBlur" --dataset_path="$dataset_path" --Blur_radius=0.5 --generate_video=False --VAE_weight_path="$VAE_model_name"
+# dataset_path="up42_sentinel2_patches"
+# python train_diffusion_superres.py --model_name="$model_name" --snapshot_name=snapshot.pt --UNet_type="Residual Cross Attention UNet" --inp_out_channels=4 --image_size=256 --noise_schedule="cosine" --noise_steps=1000 --magnification_factor=4 --Degradation_type="DownBlur" --dataset_path="$dataset_path" --Blur_radius=0.5 --generate_video=False --VAE_weight_path="$VAE_model_name"
 # python train_diffusion_superres.py --model_name="$model_name" --snapshot_name=snapshot.pt --UNet_type="Residual Cross Attention UNet" --inp_out_channels=4 --image_size=256 --noise_schedule="cosine" --noise_steps=1000 --magnification_factor=4 --Degradation_type="DownBlur" --dataset_path="$dataset_path" --Blur_radius=0.5 --num_crops=1 --batch_size=32 --generate_video=False --VAE_weight_path="$VAE_model_name"
 
 ###### SAMPLING (AGGREGATION SAMPLING) ######
