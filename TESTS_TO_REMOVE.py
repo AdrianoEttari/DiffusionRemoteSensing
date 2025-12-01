@@ -88,25 +88,7 @@ axs[2].imshow(sr_img[0].permute(1, 2, 0).cpu().detach().numpy())
 axs[2].set_title('Reconstructed Image')
 plt.show()
 
-# %% EXAMPLE VAE ON up42
-img_path = os.path.join('up42_sentinel2_patches','test_original','patch_0_4864.png')
-img = Image.open(img_path).resize((image_size, image_size))
-lr_img = img.resize((image_size//magnification_factor, image_size//magnification_factor))
-transform = transforms.ToTensor()
-hr_img = transform(img).unsqueeze(0).to(device)
-lr_img = transform(lr_img).unsqueeze(0).to(device)
 
-latents = latent_diff_model.pipe.vae.encode(hr_img).latent_dist.sample()
-reconstructed = latent_diff_model.pipe.vae.decode(latents).sample
-
-fig, axs = plt.subplots(1, 3, figsize=(10, 5))
-axs[0].imshow(lr_img[0].permute(1, 2, 0).cpu())
-axs[0].set_title('Low Resolution Image')
-axs[1].imshow(hr_img[0].permute(1, 2, 0).cpu())
-axs[1].set_title('High Resolution Image')
-axs[2].imshow(reconstructed[0].permute(1, 2, 0).cpu().detach().numpy())
-axs[2].set_title('Reconstructed Image')
-plt.show()
 # %% FINE-TUNE VAE EXAMPLE ON up42
 import os
 import matplotlib.pyplot as plt

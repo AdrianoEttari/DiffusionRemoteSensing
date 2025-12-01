@@ -257,10 +257,10 @@ class Diffusion:
             video_maker(frames, os.path.join(os.getcwd(), 'models_run', self.model_name, 'results', 'video_denoising.mp4'), 100)
             del frames
 
-        global_min_hr_img = float(torch.load(os.path.join(os.path.dirname(os.path.dirname(self.snapshot_path)), "min_hr_img.pt"))) 
-        global_max_hr_img = float(torch.load(os.path.join(os.path.dirname(os.path.dirname(self.snapshot_path)), "max_hr_img.pt")))
+        # global_min_hr_img = float(torch.load(os.path.join(os.path.dirname(os.path.dirname(self.snapshot_path)), "min_hr_img.pt"))) 
+        # global_max_hr_img = float(torch.load(os.path.join(os.path.dirname(os.path.dirname(self.snapshot_path)), "max_hr_img.pt")))
 
-        x = (x+1)*(global_max_hr_img-global_min_hr_img)/2 +global_min_hr_img
+        # x = (x+1)*(global_max_hr_img-global_min_hr_img)/2 +global_min_hr_img
   
         latent_sr_img = x / SCALE
         latent_lr_img = lr_img / SCALE
@@ -900,7 +900,7 @@ def VAE_finetuning(dataset_path, Degradation_type, image_size, magnification_fac
         image_size=image_size, model_name=None, Degradation_type=Degradation_type,
         multiple_gpus=multiple_gpus, ema_smoothing=None)
         
-    # diffusion.fine_tuning_VAE(train_loader, epochs=50, learning_rate=1e-4)
+    diffusion.fine_tuning_VAE(train_loader, epochs=50, learning_rate=1e-4)
 
     ########## ENCODE DATASET AND SAVE IT ##########
     encoded_images_train_save_path = os.path.join(dataset_path+'_VAE_encoded', "train_original")
@@ -1020,7 +1020,8 @@ def sampling_test(snapshot_folder_path, model_name, snapshot_name, UNet_type,
         axs[i,4].imshow(latent_sr_img[0][:3,:,:].permute(1,2,0).detach().cpu().numpy())
         axs[i,4].set_title('Super resolution latent')
 
-    plt.savefig(os.path.join(os.getcwd(), 'models_run', model_name, 'results', 'superres_results.png'))
+    # plt.savefig(os.path.join(os.getcwd(), 'models_run', model_name, 'results', 'superres_results.png'))
+    plt.show()
 
 def launch(args):
     '''
@@ -1109,10 +1110,10 @@ def launch(args):
 
     min_max_path = os.path.dirname(snapshot_folder_path)
 
-    VAE_finetuning(dataset_path=dataset_path, Degradation_type=Degradation_type, image_size=image_size,
-                    magnification_factor=magnification_factor, Blur_radius=Blur_radius,VAE_weight_path=VAE_weight_path,
-                          min_max_path=min_max_path, num_crops=num_crops,
-                        batch_size=batch_size, multiple_gpus=multiple_gpus, device=device)
+    # VAE_finetuning(dataset_path=dataset_path, Degradation_type=Degradation_type, image_size=image_size,
+    #                 magnification_factor=magnification_factor, Blur_radius=Blur_radius,VAE_weight_path=VAE_weight_path,
+    #                       min_max_path=min_max_path, num_crops=num_crops,
+    #                     batch_size=batch_size, multiple_gpus=multiple_gpus, device=device)
     
     # Diffusion_training(snapshot_folder_path=snapshot_folder_path, model_name=model_name, snapshot_name=snapshot_name,
     #                     noise_steps=noise_steps, ema_smoothing=ema_smoothing, magnification_factor=magnification_factor,  
@@ -1122,10 +1123,10 @@ def launch(args):
     #                                  epochs=epochs,check_preds_epoch=check_preds_epoch, patience=patience,
     #                                   loss=loss, lr_scheduler=lr_scheduler, device=device, VAE_weight_path=VAE_weight_path)
     
-    # sampling_test(snapshot_folder_path=snapshot_folder_path, model_name=model_name, snapshot_name=snapshot_name, UNet_type=UNet_type,
-    #                 input_channels=input_channels, output_channels=output_channels, image_size=image_size, 
-    #                     noise_schedule=noise_schedule, noise_steps=noise_steps, magnification_factor=magnification_factor,
-    #                         Degradation_type=Degradation_type, dataset_path=dataset_path, Blur_radius=Blur_radius, VAE_weight_path=VAE_weight_path, generate_video=generate_video, device=device)
+    sampling_test(snapshot_folder_path=snapshot_folder_path, model_name=model_name, snapshot_name=snapshot_name, UNet_type=UNet_type,
+                    input_channels=input_channels, output_channels=output_channels, image_size=image_size, 
+                        noise_schedule=noise_schedule, noise_steps=noise_steps, magnification_factor=magnification_factor,
+                            Degradation_type=Degradation_type, dataset_path=dataset_path, Blur_radius=Blur_radius, VAE_weight_path=VAE_weight_path, generate_video=generate_video, device=device)
 
 
 if __name__ == '__main__':

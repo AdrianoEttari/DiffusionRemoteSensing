@@ -237,10 +237,10 @@ class Diffusion:
             video_maker(frames, os.path.join(os.getcwd(), 'models_run', self.model_name, 'results', 'video_denoising.mp4'), 100)
             del frames
 
-        global_min_opt = float(torch.load(os.path.join(os.path.dirname(os.path.dirname(self.snapshot_path)), "min_opt.pt")))
-        global_max_opt = float(torch.load(os.path.join(os.path.dirname(os.path.dirname(self.snapshot_path)), "max_opt.pt")))
+        # global_min_opt = float(torch.load(os.path.join(os.path.dirname(os.path.dirname(self.snapshot_path)), "min_opt.pt")))
+        # global_max_opt = float(torch.load(os.path.join(os.path.dirname(os.path.dirname(self.snapshot_path)), "max_opt.pt")))
         
-        x = (x+1)*(global_max_opt-global_min_opt)/2 + global_min_opt
+        # x = (x+1)*(global_max_opt-global_min_opt)/2 + global_min_opt
     
         latent_NDVI_img = x
         latent_SAR_img = SAR_img
@@ -916,7 +916,8 @@ def sampling_test(noise_schedule, snapshot_folder_path, snapshot_name, VAE_weigh
         axs[i,2].imshow(NDVI_pred_img[0].permute(1,2,0).cpu().numpy())
         axs[i,2].set_title('NDVI pred image')
 
-    plt.savefig(os.path.join(os.getcwd(), 'models_run', model_name, 'results', 'SAR_TO_NDVI_results.png'))
+    plt.show()
+    # plt.savefig(os.path.join(os.getcwd(), 'models_run', model_name, 'results', 'SAR_TO_NDVI_results.png'))
 
 def launch(args):
     '''
