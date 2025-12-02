@@ -306,8 +306,8 @@ class get_data_superres_PLAIN(Dataset):
             lr_img = transforms.ToTensor()(lr_img)
             hr_img = transforms.ToTensor()(hr_img)
         elif self.data_format == "torch":
-            lr_img = torch.load(lr_img_path)
-            hr_img = torch.load(hr_img_path)
+            lr_img = torch.load(lr_img_path, weights_only=False)
+            hr_img = torch.load(hr_img_path, weights_only=False)
         if self.transform:
             lr_img = self.transform(lr_img)
             hr_img = self.transform(hr_img)

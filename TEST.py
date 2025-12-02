@@ -171,7 +171,7 @@ from PIL import Image, ImageFilter
 from torchvision import transforms
 
 device = "cuda"
-model_name="Residual_MultipleMultiHeadCrossAttention_UNet_superres_magnification4_LRimgsize64_up42_sentinel2_patches_downblur_StableDiffusion_LRandHR_gradientAccumulation_VAEapart_MSE_CLIPLoss"
+model_name="Residual_MultipleMultiHeadCrossAttention_UNet_superres_magnification2_LRimgsize128_up42_sentinel2_patches_downblur_StableDiffusion_LRandHR_gradientAccumulation_VAEapart_MSELoss"
 VAE_model_name="VAE_up42_LRandHR_finetuning_gradientAccumulation.pt"
 snapshot_name="snapshot.pt"
 UNet_type="Residual Cross Attention UNet"
@@ -180,7 +180,7 @@ snapshot_folder_path = os.path.join(os.curdir, 'models_run', model_name, 'weight
 image_size=256
 noise_schedule="cosine"
 noise_steps=1000
-magnification_factor=4
+magnification_factor=2
 Degradation_type="DownBlur"
 Blur_radius=0.5
 generate_video=False
@@ -202,11 +202,10 @@ diffusion = Diffusion(
     image_size=image_size, model_name=model_name, Degradation_type=Degradation_type,
     multiple_gpus=False, ema_smoothing=False)
 
-def img_processing_from_path(img_path, image_size, degradation=False):
+def img_processing_from_path(img_path, image_size, magnification_factor, degradation=False):
     img = Image.open(img_path)
     to_tensor = transforms.ToTensor()
     if degradation:
-        magnification_factor = 4
         blur_radius = 0.5
         transform = transforms.Compose([
         transforms.Resize((image_size, image_size)),
@@ -229,12 +228,11 @@ def img_processing_from_path(img_path, image_size, degradation=False):
     return img_down
 
 
-
 img_folder_path = os.path.join("up42_sentinel2_patches","test_original")
 
 for filename in os.listdir(img_folder_path)[10:15]:
     img_path = os.path.join(img_folder_path, filename)
-    img = img_processing_from_path(img_path, image_size=image_size, degradation=True).to(device)
+    img = img_processing_from_path(img_path, image_size=image_size, magnification_factor=magnification_factor, degradation=True).to(device)
     img_original = np.array(Image.open(img_path))
 
     to_tensor = transforms.ToTensor()
@@ -320,3 +318,39 @@ axs[1].set_title('High Resolution Image')
 axs[2].imshow(reconstructed[0].permute(1, 2, 0).cpu().detach().numpy())
 axs[2].set_title('Reconstructed Image')
 plt.show()
+
+# %% SENTINEL 2 BIG IMAGE PROCESSING
+import rasterio
+import numpy as np
+import matplotlib.pyplot as plt
+from PIL import Image
+import os
+
+meters_resolution = str(60)
+blue_channel = rasterio.open(os.path.join("Napoli_sentinel2",f"R{meters_resolution}m",f"T33TVF_20250205T095231_B02_{meters_resolution}m.jp2")).read(1).astype(np.float32)[:,:, None]
+green_channel = rasterio.open(os.path.join("Napoli_sentinel2",f"R{meters_resolution}m",f"T33TVF_20250205T095231_B03_{meters_resolution}m.jp2")).read(1).astype(np.float32)[:,:, None]
+red_channel = rasterio.open(os.path.join("Napoli_sentinel2",f"R{meters_resolution}m",f"T33TVF_20250205T095231_B04_{meters_resolution}m.jp2")).read(1).astype(np.float32)[:,:, None]
+# scl_channel = rasterio.open(os.path.join("Napoli_sentinel2",f"R{meters_resolution}m",f"T33TVF_20250205T095231_SCL_{meters_resolution}m.jp2")).read(1).astype(np.float32)[:,:, None]
+# cloud_mask = (scl_channel == 3) | (scl_channel == 8) | (scl_channel == 9) | (scl_channel == 10) | (scl_channel == 11)
+
+SCALE_FACTOR = 10000.0  # for L2A (use 1E4 for L1C)
+
+
+# Convert DN to reflectance
+blue_channel = np.clip(blue_channel / SCALE_FACTOR, 0,1)
+green_channel = np.clip(green_channel / SCALE_FACTOR, 0,1)
+red_channel = np.clip(red_channel / SCALE_FACTOR, 0,1)
+
+# blue_channel[cloud_mask] = np.nan
+# red_channel[cloud_mask] = np.nan
+# green_channel[cloud_mask] = np.nan
+
+rgb = np.concatenate([red_channel, green_channel, blue_channel], axis=2)*255
+
+rgb = rgb.astype(np.uint8)
+Image.fromarray(rgb).save(f'rgb_{meters_resolution}m.png')
+
+plt.imshow(rgb)
+plt.title("Sentinel-2 RGB")
+plt.show()
+# %%

@@ -569,40 +569,7 @@ axs[4].imshow(latent_sr_img[0][:3,:,:].permute(1,2,0).detach().cpu())
 axs[4].set_title('Super Resolution Latent')
 plt.show()
 
-# %% SENTINEL 2 BIG IMAGE PROCESSING
-import rasterio
-import numpy as np
-import matplotlib.pyplot as plt
-from PIL import Image
-import os
 
-blue_channel_60m = rasterio.open(os.path.join("Napoli_sentinel2","R60m","T33TVF_20250205T095231_B02_60m.jp2")).read(1).astype(np.float32)[:,:, None]
-green_channel_60m = rasterio.open(os.path.join("Napoli_sentinel2","R60m","T33TVF_20250205T095231_B03_60m.jp2")).read(1).astype(np.float32)[:,:, None]
-red_channel_60m = rasterio.open(os.path.join("Napoli_sentinel2","R60m","T33TVF_20250205T095231_B04_60m.jp2")).read(1).astype(np.float32)[:,:, None]
-scl_channel_60m = rasterio.open(os.path.join("Napoli_sentinel2","R60m","T33TVF_20250205T095231_SCL_60m.jp2")).read(1).astype(np.float32)[:,:, None]
-# cloud_mask = (scl_channel_60m == 3) | (scl_channel_60m == 8) | (scl_channel_60m == 9) | (scl_channel_60m == 10) | (scl_channel_60m == 11)
-
-SCALE_FACTOR = 10000.0  # for L2A (use 1E4 for L1C)
-
-
-# Convert DN to reflectance
-blue_channel_60m = np.clip(blue_channel_60m / SCALE_FACTOR, 0,1)
-green_channel_60m = np.clip(green_channel_60m / SCALE_FACTOR, 0,1)
-red_channel_60m = np.clip(red_channel_60m / SCALE_FACTOR, 0,1)
-
-# blue_channel_60m[cloud_mask] = np.nan
-# red_channel_60m[cloud_mask] = np.nan
-# green_channel_60m[cloud_mask] = np.nan
-
-rgb_60m = np.concatenate([red_channel_60m, green_channel_60m, blue_channel_60m], axis=2)
-
-rgb_60m = rgb_60m[:1024, :1024,:]*255
-rgb_60m = rgb_60m.astype(np.uint8)
-Image.fromarray(rgb_60m).save('rgb_60m.png')
-
-plt.imshow(rgb_60m)
-plt.title("Sentinel-2 RGB")
-plt.show()
 
 # %% SAR to NDVI trials
 import torch

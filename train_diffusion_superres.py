@@ -963,8 +963,8 @@ def Diffusion_training(snapshot_folder_path, model_name, snapshot_name,
 
     ########## CREATE DATALOADERS FOR THE POST-ENCODING MODEL ##########
     train_loader = dataloader_POST_encoding_maker(encoded_images_train_save_path, batch_size, multiple_gpus)
-    # val_loader = dataloader_POST_encoding_maker(encoded_images_val_save_path, batch_size, multiple_gpus)
-    val_loader = None
+    val_loader = dataloader_POST_encoding_maker(encoded_images_val_save_path, batch_size, multiple_gpus)
+    # val_loader = None
     ########## TRAIN DIFFUSION MODEL ##########
     diffusion.train(
         lr=lr, epochs=epochs, check_preds_epoch=check_preds_epoch,
@@ -1115,18 +1115,18 @@ def launch(args):
     #                       min_max_path=min_max_path, num_crops=num_crops,
     #                     batch_size=batch_size, multiple_gpus=multiple_gpus, device=device)
     
-    # Diffusion_training(snapshot_folder_path=snapshot_folder_path, model_name=model_name, snapshot_name=snapshot_name,
-    #                     noise_steps=noise_steps, ema_smoothing=ema_smoothing, magnification_factor=magnification_factor,  
-    #                         UNet_type=UNet_type, input_channels=input_channels, output_channels=output_channels, 
-    #                             batch_size=batch_size, image_size=image_size, multiple_gpus=multiple_gpus, 
-    #                                 noise_schedule=noise_schedule, dataset_path=dataset_path, lr=lr,
-    #                                  epochs=epochs,check_preds_epoch=check_preds_epoch, patience=patience,
-    #                                   loss=loss, lr_scheduler=lr_scheduler, device=device, VAE_weight_path=VAE_weight_path)
+    Diffusion_training(snapshot_folder_path=snapshot_folder_path, model_name=model_name, snapshot_name=snapshot_name,
+                        noise_steps=noise_steps, ema_smoothing=ema_smoothing, magnification_factor=magnification_factor,  
+                            UNet_type=UNet_type, input_channels=input_channels, output_channels=output_channels, 
+                                batch_size=batch_size, image_size=image_size, multiple_gpus=multiple_gpus, 
+                                    noise_schedule=noise_schedule, dataset_path=dataset_path, lr=lr,
+                                     epochs=epochs,check_preds_epoch=check_preds_epoch, patience=patience,
+                                      loss=loss, lr_scheduler=lr_scheduler, device=device, VAE_weight_path=VAE_weight_path)
     
-    sampling_test(snapshot_folder_path=snapshot_folder_path, model_name=model_name, snapshot_name=snapshot_name, UNet_type=UNet_type,
-                    input_channels=input_channels, output_channels=output_channels, image_size=image_size, 
-                        noise_schedule=noise_schedule, noise_steps=noise_steps, magnification_factor=magnification_factor,
-                            Degradation_type=Degradation_type, dataset_path=dataset_path, Blur_radius=Blur_radius, VAE_weight_path=VAE_weight_path, generate_video=generate_video, device=device)
+    # sampling_test(snapshot_folder_path=snapshot_folder_path, model_name=model_name, snapshot_name=snapshot_name, UNet_type=UNet_type,
+    #                 input_channels=input_channels, output_channels=output_channels, image_size=image_size, 
+    #                     noise_schedule=noise_schedule, noise_steps=noise_steps, magnification_factor=magnification_factor,
+    #                         Degradation_type=Degradation_type, dataset_path=dataset_path, Blur_radius=Blur_radius, VAE_weight_path=VAE_weight_path, generate_video=generate_video, device=device)
 
 
 if __name__ == '__main__':
