@@ -216,6 +216,8 @@ class Diffusion:
 
         if len(lr_img.shape) < 4:
             lr_img = lr_img.unsqueeze(0)
+        elif len(lr_img.shape) == 4:
+            n = lr_img.shape[0]
 
         lr_img = F.interpolate(lr_img.to('cpu'), scale_factor=self.magnification_factor, mode='bilinear').to(self.device)
         
@@ -231,6 +233,7 @@ class Diffusion:
 
             x = x.to(self.device) 
             x = 0.05*lr_img+0.95*x
+
 
             frames = [] if generate_video else None  # Only allocate memory if needed
             
@@ -1110,18 +1113,18 @@ def launch(args):
 
     min_max_path = os.path.dirname(snapshot_folder_path)
 
-    # VAE_finetuning(dataset_path=dataset_path, Degradation_type=Degradation_type, image_size=image_size,
-    #                 magnification_factor=magnification_factor, Blur_radius=Blur_radius,VAE_weight_path=VAE_weight_path,
-    #                       min_max_path=min_max_path, num_crops=num_crops,
-    #                     batch_size=batch_size, multiple_gpus=multiple_gpus, device=device)
+    VAE_finetuning(dataset_path=dataset_path, Degradation_type=Degradation_type, image_size=image_size,
+                    magnification_factor=magnification_factor, Blur_radius=Blur_radius,VAE_weight_path=VAE_weight_path,
+                          min_max_path=min_max_path, num_crops=num_crops,
+                        batch_size=batch_size, multiple_gpus=multiple_gpus, device=device)
     
-    Diffusion_training(snapshot_folder_path=snapshot_folder_path, model_name=model_name, snapshot_name=snapshot_name,
-                        noise_steps=noise_steps, ema_smoothing=ema_smoothing, magnification_factor=magnification_factor,  
-                            UNet_type=UNet_type, input_channels=input_channels, output_channels=output_channels, 
-                                batch_size=batch_size, image_size=image_size, multiple_gpus=multiple_gpus, 
-                                    noise_schedule=noise_schedule, dataset_path=dataset_path, lr=lr,
-                                     epochs=epochs,check_preds_epoch=check_preds_epoch, patience=patience,
-                                      loss=loss, lr_scheduler=lr_scheduler, device=device, VAE_weight_path=VAE_weight_path)
+    # Diffusion_training(snapshot_folder_path=snapshot_folder_path, model_name=model_name, snapshot_name=snapshot_name,
+    #                     noise_steps=noise_steps, ema_smoothing=ema_smoothing, magnification_factor=magnification_factor,  
+    #                         UNet_type=UNet_type, input_channels=input_channels, output_channels=output_channels, 
+    #                             batch_size=batch_size, image_size=image_size, multiple_gpus=multiple_gpus, 
+    #                                 noise_schedule=noise_schedule, dataset_path=dataset_path, lr=lr,
+    #                                  epochs=epochs,check_preds_epoch=check_preds_epoch, patience=patience,
+    #                                   loss=loss, lr_scheduler=lr_scheduler, device=device, VAE_weight_path=VAE_weight_path)
     
     # sampling_test(snapshot_folder_path=snapshot_folder_path, model_name=model_name, snapshot_name=snapshot_name, UNet_type=UNet_type,
     #                 input_channels=input_channels, output_channels=output_channels, image_size=image_size, 

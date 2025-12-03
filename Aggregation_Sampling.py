@@ -6,7 +6,7 @@ import torch
 from numpy import pi, exp, sqrt
 from tqdm import tqdm 
 from diffusers import StableDiffusionPipeline
-from UNet_model_superres_VMHA import Residual_Attention_UNet_superres
+# from UNet_model_superres_VMHA import Residual_Attention_UNet_superres
 from UNet_model_superres_CrossAttention import Residual_CrossAttention_UNet_superres, EMA
 from PIL import Image
 from utils import get_data_patches_lr
@@ -94,23 +94,32 @@ class split_aggregation_sampling:
         im_res = torch.zeros([channels, height*magnification_factor, width*magnification_factor], dtype=img_lr.dtype, device=self.device)
         pixel_count = torch.zeros([channels, height*magnification_factor, width*magnification_factor], dtype=img_lr.dtype, device=self.device)
 
+        patches_folder_output_path = "SR_patches_folder"
+        
         os.makedirs('SR_patches_folder', exist_ok=True)
         to_tensor = transforms.ToTensor()
         to_pil = transforms.ToPILImage()
-        print(f"Generating {len(self.patches_lr)} patches")
+        num_batches = len(self.data_loader_patches_lr)
+        print(f"Generating {len(self.patches_lr)} patches in {num_batches} batches")
         for i, batch_patch_lr in tqdm(enumerate(self.data_loader_patches_lr), desc="Saving patches"):
-            batch_patch_lr = batch_patch_lr.to(self.device)
-            latent_patch_lr, latent_patch_sr, patch_sr = self.diffusion_model.sample(self.batch_dataloader_size, self.model, batch_patch_lr, generate_video=False)
+            patch_filename = str(i*self.batch_dataloader_size+len(batch_patch_lr))+".png"
+            patch_path = os.path.join(patches_folder_output_path, patch_filename)
+            if os.path.exists(patch_path):
+                print(f"Skip batch {i}")
+            else:
+                batch_patch_lr = batch_patch_lr.to(self.device)
 
-            del latent_patch_lr, latent_patch_sr
-            torch.cuda.empty_cache()
-            patch_sr = patch_sr.cpu()
+                latent_patch_lr, latent_patch_sr, patch_sr = self.diffusion_model.sample(self.batch_dataloader_size, self.model, batch_patch_lr, generate_video=False)
 
-            for j in range(len(patch_sr)):
-                to_pil(patch_sr[j]).save(os.path.join("SR_patches_folder", str(i*self.batch_dataloader_size+j)+".png"))
+                del latent_patch_lr, latent_patch_sr
+                torch.cuda.empty_cache()
+                patch_sr = patch_sr.cpu()
 
-            del patch_sr
-            torch.cuda.empty_cache()
+                for j in range(len(patch_sr)):
+                    to_pil(patch_sr[j]).save(os.path.join(patches_folder_output_path, str(i*self.batch_dataloader_size+j)+".png"))
+
+                del patch_sr
+                torch.cuda.empty_cache()
 
         for i in tqdm(range(len(self.patches_lr)), desc="Collage of the patches"):
             patch_sr = to_tensor(Image.open(os.path.join("SR_patches_folder", str(i)+".png"))).to(self.device)
@@ -176,7 +185,7 @@ def launch(args):
     model_name = args.model_name
     Degradation_type = args.Degradation_type
     patch_size = args.patch_size
-    stride = args.stride
+    # stride = args.stride
     batch_dataloader_size = args.batch_dataloader_size
     destination_path = args.destination_path
     img_lr_path = args.img_lr_path
@@ -185,9 +194,11 @@ def launch(args):
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'mps' if torch.backends.mps.is_available() else 'cpu')
     snapshot_path = os.path.join(snapshot_folder_path, snapshot_name)
+    stride = patch_size//2
 
     if UNet_type.lower() == 'residual attention unet':
-        model = Residual_Attention_UNet_superres(input_channels, output_channels, device).to(device)
+        # model = Residual_Attention_UNet_superres(input_channels, output_channels, device).to(device)
+        pass
     elif UNet_type.lower() == 'residual cross attention unet':
         print('Using Residual Cross Attention UNet')
         model = Residual_CrossAttention_UNet_superres(input_channels, output_channels, device).to(device)
@@ -249,8 +260,8 @@ if __name__ == '__main__':
     parser.add_argument('--Degradation_type', type=str, default=None)
     parser.add_argument('--magnification_factor', type=int, default=None)
     parser.add_argument('--inp_out_channels', type=int, default=None)
-    parser.add_argument('--patch_size', type=int, default=64) # It must be 64 because the lr_img is 4 times smaller than the hr_img that is 256 shaped
-    parser.add_argument('--stride', type=int, default=32)
+    parser.add_argument('--patch_size', type=int, default=64) # Check in the name of the model you use, the patch_size. It should be 64 if magnification_factor=4 and 128 if magnification_factor=2
+    # parser.add_argument('--stride', type=int, default=None)
     parser.add_argument('--batch_dataloader_size', type=int, default=1)
     parser.add_argument('--destination_path', type=str, default=None)
     parser.add_argument('--img_lr_path', type=str, default=None)

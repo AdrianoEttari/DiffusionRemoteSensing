@@ -181,4 +181,35 @@ def compute_global_min_max(root_dir):
 
 _min, _max = compute_global_min_max(train_path)
 print(_min, _max)
+    
+
+# %%
+import os
+from PIL import Image
+import matplotlib.pyplot as plt
+import numpy as np
+sr_img = np.array(Image.open("rgb_60m_SR.png"))
+lr_img = np.array(Image.open("rgb_60m.png"))
+
+min_x = 1250
+max_x = 1500
+min_y = 250
+max_y = 500
+
+fig, axs = plt.subplots(1,2,figsize=(15,30))
+
+lr_img_to_plot = lr_img[min_x:max_x, min_y:max_y,:]
+sr_img_to_plot = sr_img[min_x*2:max_x*2, min_y*2:max_y*2,:]
+axs[0].imshow(lr_img_to_plot)
+axs[0].axis("off")
+axs[1].imshow(sr_img_to_plot)
+axs[1].axis("off")
+plt.savefig("lr_vs_sr_comparison.png", dpi=300, bbox_inches="tight")
+plt.show()
+
+# %%
+import os
+from PIL import Image
+import matplotlib.pyplot as plt
+import numpy as np
 

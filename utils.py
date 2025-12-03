@@ -410,6 +410,7 @@ def convert_png_to_jpg(png_file, jpg_file):
     except Exception as e:
         print("Conversion failed:", e)
 
+
 # def gif_maker(frames, frame_stride=1, destination_path='output.gif'):
 #     '''
 #     This function saves the frames that are passed in input as a gif.

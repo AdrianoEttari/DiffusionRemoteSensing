@@ -1,3 +1,27 @@
+#%% FROM NUMPY TO TORCH
+import os
+import numpy as np
+import torch
+from torchvision import transforms
+from tqdm import tqdm
+
+to_tensor = transforms.ToTensor()
+
+sets = ["train_original", "val_original"]
+img_types = ["hr_img", "lr_img"]
+
+for _set in sets:
+    for img_type in img_types:
+        folder_path = os.path.join("up42_sentinel2_patches_VAE_encoded_numpy", _set, img_type)
+        imgs_filenames = os.listdir(folder_path)
+        output_folder_path = os.path.join("up42_sentinel2_patches_VAE_encoded",_set, img_type)
+        os.makedirs(output_folder_path, exist_ok=True)
+        if len(os.listdir(output_folder_path)) == 0:
+            for img_filename in tqdm(imgs_filenames):
+                img_path = os.path.join(folder_path, img_filename)
+                img = to_tensor(np.load(img_path))
+                img_output_path = os.path.join(output_folder_path, img_filename.replace("npy", "pt"))
+                torch.save(img, img_output_path)
 #%% SENTINEL 2 LOADING AND SHOWING
 from PIL import Image
 import numpy as np
@@ -229,8 +253,9 @@ def img_processing_from_path(img_path, image_size, magnification_factor, degrada
 
 
 img_folder_path = os.path.join("up42_sentinel2_patches","test_original")
-
-for filename in os.listdir(img_folder_path)[10:15]:
+output_folder_path = os.path.join("lr_vs_sr_comparison")
+os.makedirs(output_folder_path, exist_ok=True)
+for filename in os.listdir(img_folder_path)[30:31]:
     img_path = os.path.join(img_folder_path, filename)
     img = img_processing_from_path(img_path, image_size=image_size, magnification_factor=magnification_factor, degradation=True).to(device)
     img_original = np.array(Image.open(img_path))
@@ -245,18 +270,27 @@ for filename in os.listdir(img_folder_path)[10:15]:
 
     axs[0].imshow(img.permute(1,2,0).detach().cpu().numpy())
     axs[0].set_title('Low resolution image')
+    axs[0].axis("off")
     axs[1].imshow(img_original)
     axs[1].set_title('High resolution image')
+    axs[1].axis("off")
     axs[2].imshow(superres_img[0].permute(1,2,0).detach().cpu().numpy())
     axs[2].set_title('Super resolution image')
+    axs[2].axis("off")
 
     axs[3].imshow(latent_lr_img[0][:3,:,:].permute(1,2,0).detach().cpu().numpy())
     axs[3].set_title('Low resolution latent')
+    axs[3].axis("off")
     axs[4].imshow(latent_hr_img[0][:3,:,:].permute(1,2,0).detach().cpu().numpy())
     axs[4].set_title('High resolution latent')
+    axs[4].axis("off")
     axs[5].imshow(latent_sr_img[0][:3,:,:].permute(1,2,0).detach().cpu().numpy())
     axs[5].set_title('Super resolution latent')
+    axs[5].axis("off")
+    plt.savefig(os.path.join(output_folder_path,f"{filename}"), dpi=300, bbox_inches="tight")
+
     plt.show()
+    
 
 
 # %% EXAMPLE VAE ON up42
@@ -326,7 +360,7 @@ import matplotlib.pyplot as plt
 from PIL import Image
 import os
 
-meters_resolution = str(60)
+meters_resolution = str(20)
 blue_channel = rasterio.open(os.path.join("Napoli_sentinel2",f"R{meters_resolution}m",f"T33TVF_20250205T095231_B02_{meters_resolution}m.jp2")).read(1).astype(np.float32)[:,:, None]
 green_channel = rasterio.open(os.path.join("Napoli_sentinel2",f"R{meters_resolution}m",f"T33TVF_20250205T095231_B03_{meters_resolution}m.jp2")).read(1).astype(np.float32)[:,:, None]
 red_channel = rasterio.open(os.path.join("Napoli_sentinel2",f"R{meters_resolution}m",f"T33TVF_20250205T095231_B04_{meters_resolution}m.jp2")).read(1).astype(np.float32)[:,:, None]
